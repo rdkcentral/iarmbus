@@ -38,6 +38,47 @@
 extern IARM_Result_t IARM_Bus_DaemonStart(int argc, char *argv[]);
 extern IARM_Result_t IARM_Bus_DaemonStop(void);
 
+
+IARM_Result_t IARM_Bus_DaemonStart(int argc, char *argv[])
+{
+    int i = 0;
+	char *settingsFile = NULL;
+
+	if (argc == 2) settingsFile = argv[1];
+
+    IARM_Bus_Init(IARM_BUS_DAEMON_NAME);
+    IARM_Bus_Connect();
+
+    IARM_Bus_RegisterEvent(IARM_BUS_SIGNAL_MAX);
+
+    IARM_Bus_RegisterCall(IARM_BUS_DAEMON_API_RequestOwnership,  	_RequestOwnership);
+    IARM_Bus_RegisterCall(IARM_BUS_DAEMON_API_ReleaseOwnership,  	_ReleaseOwnership);
+    IARM_Bus_RegisterCall(IARM_BUS_DAEMON_API_RegisterMember,    	_RegisterMember);
+    IARM_Bus_RegisterCall(IARM_BUS_DAEMON_API_UnRegisterMember,  	_UnRegisterMember);
+    IARM_Bus_RegisterCall(IARM_BUS_DAEMON_API_PowerPreChange,   	_PowerPreChange);
+    IARM_Bus_RegisterCall(IARM_BUS_DAEMON_API_DeepSleepWakeup,       _DeepSleepWakeup);
+    IARM_Bus_RegisterCall(IARM_BUS_DAEMON_API_CheckRegistration, 	_CheckRegistration);
+    IARM_Bus_RegisterCall(IARM_BUS_DAEMON_API_ResolutionPreChange, 	_ResolutionPreChange);
+    IARM_Bus_RegisterCall(IARM_BUS_DAEMON_API_ResolutionPostChange,  _ResolutionPostChange);
+    IARM_Bus_RegisterCall(IARM_BUS_DAEMON_API_SysModeChange,     	_SysModeChange);
+    IARM_Bus_RegisterCall(IARM_BUS_DAEMON_API_RegisterPreChange,        _RegisterPreChange);
+    
+    for (i = 0; i < IARM_BUS_SIGNAL_MAX ; i++) {
+    }
+
+    return IARM_RESULT_SUCCESS;
+}
+
+
+IARM_Result_t IARM_Bus_DaemonStop(void)
+{
+    IARM_Bus_Disconnect();
+    IARM_Bus_Term();
+    return IARM_RESULT_SUCCESS;
+}
+
+
+
 static void signals_register(void);
 static void signal_handler(int signal);
 
