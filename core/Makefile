@@ -59,7 +59,7 @@ endif
 
 LDFLAGS+=-L$(DFB_LIB) -L$(OPENSOURCE_BASE)/lib
 LDFLAGS += $(FUSION_LIBS)  
-LDFLAGS+=-L$(GLIB_LIBRARY_PATH)/
+LDFLAGS+=-L$(GLIB_LIBRARY_PATH)/ -lsafec-3.5
 LDFLAGS+= -L$(RDK_DIR)/sdk/fsroot/ramdisk/usr/local/lib/ -llog4c
 LDFLAGS+=$(GLIBS)
 
