@@ -1264,6 +1264,7 @@ IARM_Result_t IARM_Term(void)
     //log("Entering [%s]\r\n", __FUNCTION__);
 
     if (retCode == IARM_RESULT_SUCCESS) {
+        cctx->isActive = 0;
 
         dbus_connection_close(cctx->conn);
         dbus_connection_close(cctx->connMethodCall);
@@ -1290,7 +1291,6 @@ IARM_Result_t IARM_Term(void)
         }
         pthread_mutex_unlock (&(cctx->mutexConn));
 
-        cctx->isActive = 0;
         pthread_mutex_destroy(&(cctx->mutexConn));
         pthread_cond_destroy(&(cctx->condConn));
         IARM_Free(IARM_MEMTYPE_PROCESSLOCAL, cctx);
