@@ -1,5 +1,5 @@
 /*
- * If not stated otherwise in this file or this component's Licenses.txt file the
+ * If not stated otherwise in this file or this component's LICENSE file the
  * following copyright and licenses apply:
  *
  * Copyright 2020 RDK Management
@@ -17,10 +17,18 @@
  * limitations under the License.
 */
 
-#ifndef _SAFE_LIB_H_
-#define _SAFE_LIB_H_
+#define SAFEC_DUMMY_API 1
+#ifndef SAFEC_DUMMY_API
+#include "safe_str_lib.h"
+#include "safe_mem_lib.h"
 
-#include <cstdio>
+/* Macro is defined for non clobbering of the safec secure string API strcpy_s & memcpy_s function*/
+/* strcpy_s overwrites the old value and nulls the dest when encounters an error*/
+#ifndef STRCPY_S_NOCLOBBER
+ #define STRCPY_S_NOCLOBBER(dst,dmax,src)   ((src != NULL) ? (strlen(src) < dmax ?  strcpy_s(dst,dmax,src) : ESNOSPC):ESNULLP)
+#endif
+#define MEMCPY_S_NOCLOBBER(dst,dmax,src,len)   ((src != NULL) ? (len <= dmax ?  memcpy_s(dst,dmax,src,len) : ESNOSPC):ESNULLP)
+#endif
 
 #define STRCPY_S(dest,size,source)                      \
         { \
@@ -51,6 +59,7 @@
         RDK_SAFECLIB_ERR(rc);                                   \
     }
 
+#ifdef SAFEC_DUMMY_API
 #include <stdarg.h>
 #include <string.h>
 #include <strings.h>
@@ -153,4 +162,4 @@ static inline int memcmp_s(const void *dst, int dmax, const void *src, int len, 
         *r = memcmp(dst, src,len);
         return EOK;
 }
-#endif /*_SAFE_LIB_H_*/
+#endif
