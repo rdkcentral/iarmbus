@@ -60,8 +60,13 @@ endif
 LDFLAGS+=-L$(DFB_LIB) -L$(OPENSOURCE_BASE)/lib
 LDFLAGS += $(FUSION_LIBS)  
 LDFLAGS+=-L$(GLIB_LIBRARY_PATH)/
-LDFLAGS+= -L$(RDK_DIR)/sdk/fsroot/ramdisk/usr/local/lib/ -llog4c
 LDFLAGS+=$(GLIBS)
+
+ifeq ($(RDK_PLATFORM_SOC),standalone)
+CFLAGS += -DSTANDALONE_BUILD
+else
+LDFLAGS+= -L$(RDK_DIR)/sdk/fsroot/ramdisk/usr/local/lib/ -llog4c
+endif
 
 all: clean library executable
 	@echo "Build Finished...."
