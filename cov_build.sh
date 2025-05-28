@@ -33,7 +33,8 @@ CFLAGS="$CFLAGS -O2 -Wall -fPIC -I./include -I${GLIB_INCLUDE_PATH} -I${GLIB_CONF
 	-I/usr/include/libsoup-2.4 \
 	-I/usr/include/gssdp-1.0"
 export CFLAGS
-export LDFLAGS+="-Wl,-rpath, -L/usr/lib"
+LDFLAGS="$LDFLAGS -Wl,-rpath, -L/usr/lib"
+export LDFLAGS
 export OPENSOURCE_BASE=${FSROOT}/usr
 export CC="$CROSS_COMPILE-gcc $CFLAGS"
 export CXX="$CROSS_COMPILE-g++ $CFLAGS $LDFLAGS"
