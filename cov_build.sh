@@ -6,6 +6,9 @@ export ROOT=/usr
 export INSTALL_DIR=${ROOT}/local
 mkdir -p $INSTALL_DIR
 
+sudo apt-get update
+sudo apt-get install -y libdbus-1-dev
+
 cd $ROOT
 #build log4c
 echo "##### Building log4c module"
