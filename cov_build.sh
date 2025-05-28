@@ -1,5 +1,6 @@
 #!/bin/bash
-
+set -x
+set -e
 WORKDIR=`pwd`
 export ROOT=/usr
 export INSTALL_DIR=${ROOT}/local
