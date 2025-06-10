@@ -286,7 +286,7 @@ IARM_Result_t IARM_RegisterCall(const char *ownerName, const char *callName, IAR
                 /*XONE-13886 mitigation, unregister the component before recreating */
                 __TIMESTAMP();log("XONE-13886: COMPONENT [%s] Already Exist!\r\n", compId);
                 dRet = cctx->coma->GetComponent( cctx->coma, compId, 0/*WaitForever*/,  &comp);
-                __TIMESTAMP();log("XONE-13886: EXISTING COMPONENT [%s] TO RELEASE! [%d]\r\n", compId, dRet);
+                __TIMESTAMP();log("XONE-13886: EXISTING COMPONENT [%s] TO RELEASE! [%d]\r\n", dRet);
                 if (dRet == DR_OK) {
                     comp->Release(comp);
                 }
