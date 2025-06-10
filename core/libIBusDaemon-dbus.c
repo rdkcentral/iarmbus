@@ -176,7 +176,7 @@ static IARM_Result_t _UnRegisterMember(void *arg)
         int i = 0;
         for (i = 0; i < IARM_BUS_RESOURCE_MAX; i++) {
             if (m_resourceOwner[i] == registeredMember) {
-                printf("WARN: [%s] - [%s] still owns resource [%d], force release\r\n", __FUNCTION__, member->selfName, i);
+                printf("WARN: [%s] - [%s] still owns resource [%d], force release\r\n", member->selfName, i);
                 m_resourceOwner[i] = NULL;
             }
         }
