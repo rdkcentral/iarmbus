@@ -23,7 +23,10 @@
 #include <sys/types.h>
 #include <signal.h>
 #include <unistd.h>
+
+#define _TIME_BITS 64
 #include <time.h>
+
 #include "string.h"
 
 #ifdef ENABLE_SD_NOTIFY
