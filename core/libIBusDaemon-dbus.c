@@ -133,27 +133,27 @@ static IARM_Bus_Member_t * _findRegisteredMember(char *name)
  */
 static IARM_Result_t _RegisterMember(void *arg)
 {
-    IARM_Result_t retCode = IARM_RESULT_SUCCESS;
-	IARM_Bus_Member_t *member = (IARM_Bus_Member_t *) malloc(sizeof(IARM_Bus_Member_t));
-    
+    IARM_Bus_Member_t *member = (IARM_Bus_Member_t *) malloc(sizeof(IARM_Bus_Member_t));
     errno_t rc = -1;
+
+    if (NULL == arg)
+	    return IARM_RESULT_INVALID_PARAM;
     rc = memcpy_s(member,sizeof(IARM_Bus_Member_t), arg, sizeof(IARM_Bus_Member_t));
     if(rc!=EOK)
     {
 	    ERR_CHK(rc);
     }
-	
+
     //log("Entering [%s] - [%s]\r\n", __FUNCTION__, member->selfName);
-    
-    if (_IsRegistered(member->selfName)){
+
+    if ((strlen(member->selfName)) && _IsRegistered(member->selfName)) {
         log("Found and Unregistering old instance of client - [%s]\r\n", member->selfName);
         _UnRegisterMember (member);
     }
-    
+
     m_registeredList = g_list_append(m_registeredList, &member->link);
     _dumpRegisteredMembers();
-    return retCode;
-
+    return IARM_RESULT_SUCCESS;
 }
 
 static IARM_Result_t _UnRegisterMember(void *arg)
