@@ -1191,6 +1191,7 @@ static void _EventHandler_FuncWrapper (void *ctx, void *arg)
                         ctx->handler(eventData->owner, eventData->id, (void *)&eventData->data, eventData->len);
                 }
             }
+	/*coverity[dead_error_line]*/
         } while ((event_list = g_list_next(event_list)) != NULL);
     }
     IBUS_Unlock(lock);
