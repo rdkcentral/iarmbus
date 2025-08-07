@@ -136,7 +136,7 @@ static IARM_Result_t _RegisterMember(void *arg)
     IARM_Bus_Member_t *member = (IARM_Bus_Member_t *) malloc(sizeof(IARM_Bus_Member_t));
     errno_t rc = -1;
 
-    if (NULL = member) {
+    if (NULL == member) {
 	    return IARM_RESULT_OOM;
     }
     if (NULL == arg) {
