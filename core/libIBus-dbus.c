@@ -1188,10 +1188,9 @@ static void _EventHandler_FuncWrapper (void *ctx, void *arg)
 		{
                     //log("Event Handler [%s]for Event [%d] will be  invoked\r\n", eventData->owner, eventData->id);
                     if (cctx->handler != NULL)
-                        ctx->handler(eventData->owner, eventData->id, (void *)&eventData->data, eventData->len);
+                        ((IARM_Bus_EventContext_t *)ctx)->handler(eventData->owner, eventData->id, (void *)&eventData->data, eventData->len);
                 }
             }
-	/*coverity[dead_error_line]*/
         } while ((event_list = g_list_next(event_list)) != NULL);
     }
     IBUS_Unlock(lock);
