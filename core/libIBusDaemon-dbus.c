@@ -150,13 +150,13 @@ static IARM_Result_t _RegisterMember(void *arg)
     }
 
     //log("Entering [%s] - [%s]\r\n", __FUNCTION__, member->selfName);
-    if (member->selfName == NULL || strlen(member->selfName) == 0) {
+    if (strlen(member->selfName) == 0) {
 	    free(member);
 	    return IARM_RESULT_INVALID_PARAM;
     }
-    if ((strlen(member->selfName)) && _IsRegistered(member->selfName)) {
+    if (_IsRegistered(member->selfName)) {
         log("Found and Unregistering old instance of client - [%s]\r\n", member->selfName);
-        _UnRegisterMember (member);
+        _UnRegisterMember(member);
     }
 
     m_registeredList = g_list_append(m_registeredList, &member->link);
