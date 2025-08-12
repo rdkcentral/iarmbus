@@ -23,7 +23,6 @@
 #include <sys/types.h>
 #include <signal.h>
 #include <unistd.h>
-#include <time.h>
 #include "string.h"
 
 #ifdef ENABLE_SD_NOTIFY
@@ -154,12 +153,9 @@ int main(int argc,char *argv[])
     IARM_Bus_WritePIDFile(xstr(PID_FILE_PATH) "/iarmbusd.pid");
 #endif
 
-    time_t curr = 0;
     while(g_running) {
-        time(&curr);
-    	LOG("I-ARM Bus Daemon : HeartBeat at %s\r\n", ctime(&curr));
+    	LOG("I-ARM Bus Daemon : HeartBeat ping\r\n");
     	sleep(300);
-    	/*LOG("Bus Daemon HeartBeat DONE\r\n");*/
     }
     LOG("stop daemon\r\n");
     IARM_Bus_DaemonStop();
