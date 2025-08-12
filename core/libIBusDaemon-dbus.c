@@ -131,6 +131,40 @@ static IARM_Bus_Member_t * _findRegisteredMember(char *name)
  *
  * @param [in] arg reference of IARM_Bus_Member_t of the caller trying to register with UIMgr. This is allocated from shared memory
  */
+#if 1 // New Code
+static IARM_Result_t _RegisterMember(void *arg)
+{
+    IARM_Bus_Member_t *member = (IARM_Bus_Member_t *) malloc(sizeof(IARM_Bus_Member_t));
+    errno_t rc = -1;
+
+    if (NULL == member) {
+	    return IARM_RESULT_OOM;
+    }
+    if (NULL == arg) {
+	    free(member);
+	    return IARM_RESULT_INVALID_PARAM;
+    }
+    rc = memcpy_s(member,sizeof(IARM_Bus_Member_t), arg, sizeof(IARM_Bus_Member_t));
+    if(rc!=EOK)
+    {
+	    ERR_CHK(rc);
+    }
+
+    //log("Entering [%s] - [%s]\r\n", __FUNCTION__, member->selfName);
+    if (strlen(member->selfName) == 0) {
+	    free(member);
+	    return IARM_RESULT_INVALID_PARAM;
+    }
+    if (_IsRegistered(member->selfName)) {
+        log("Found and Unregistering old instance of client - [%s]\r\n", member->selfName);
+        _UnRegisterMember(member);
+    }
+
+    m_registeredList = g_list_append(m_registeredList, &member->link);
+    _dumpRegisteredMembers();
+    return IARM_RESULT_SUCCESS;
+}
+#else
 static IARM_Result_t _RegisterMember(void *arg)
 {
     IARM_Result_t retCode = IARM_RESULT_SUCCESS;
@@ -153,8 +187,8 @@ static IARM_Result_t _RegisterMember(void *arg)
     m_registeredList = g_list_append(m_registeredList, &member->link);
     _dumpRegisteredMembers();
     return retCode;
-
 }
+#endif
 
 static IARM_Result_t _UnRegisterMember(void *arg)
 {
