@@ -1167,7 +1167,6 @@ static void _BusCall_FuncWrapper(void *callCtx, unsigned long methodID, void *ar
 	IARM_CallReturn(cctx->ownerName, cctx->methodName, arg, retCode, serial);
 }
 
-#if 0
 static void _EventHandler_FuncWrapper (void *ctx, void *arg)
 {
     IARM_EventData_t *eventData = (IARM_EventData_t *)arg;
@@ -1189,7 +1188,7 @@ static void _EventHandler_FuncWrapper (void *ctx, void *arg)
 		{
                     //log("Event Handler [%s]for Event [%d] will be  invoked\r\n", eventData->owner, eventData->id);
                     if (cctx->handler != NULL)
-                        ((IARM_Bus_EventContext_t *)ctx)->handler(eventData->owner, eventData->id, (void *)&eventData->data, eventData->len);
+                        ((IARM_Bus_EventContext_t *)cctx->handler(eventData->owner, eventData->id, (void *)&eventData->data, eventData->len);
                 }
             } else {
                     log("Event Handler got cctx NULL.\r\n");
@@ -1198,39 +1197,6 @@ static void _EventHandler_FuncWrapper (void *ctx, void *arg)
     }
     IBUS_Unlock(lock);
 }
-#else
-static void _EventHandler_FuncWrapper (void *ctx, void *arg)
-{
-	IARM_EventData_t *eventData = (IARM_EventData_t *)arg;
-	IARM_Bus_EventContext_t *cctx = NULL;
-
-    	IBUS_Lock(lock);
-	GList *event_list = g_list_first(m_eventHandlerList);
-	if (event_list != NULL  && eventData != NULL){
-		do	
-		{
-			cctx = (IARM_Bus_EventContext_t *)event_list->data;
-			if (cctx != NULL)
-			{ 
-				if ((strncmp(cctx->ownerName, eventData->owner,IARM_MAX_NAME_LEN) == 0)
-						&& (cctx->eventId == eventData->id)) {
-
-					//log("Event Handler [%s]for Event [%d] will be  invoked\r\n", eventData->owner, eventData->id);
-
-					if (cctx->handler != NULL) 
-						cctx->handler(eventData->owner, eventData->id, (void *)&eventData->data, eventData->len);
-				}
-			}
-			else
-			{
-				cctx = NULL;
-			}
-			/*coverity[dead_error_line]*/
-		}while ((event_list = g_list_next(event_list)) != NULL);
-	}
-    	IBUS_Unlock(lock);
-}
-#endif
 
 #define PID_BUF_SIZE 100
 /**
