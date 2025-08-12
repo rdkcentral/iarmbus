@@ -1188,7 +1188,7 @@ static void _EventHandler_FuncWrapper (void *ctx, void *arg)
 		{
                     //log("Event Handler [%s]for Event [%d] will be  invoked\r\n", eventData->owner, eventData->id);
                     if (cctx->handler != NULL)
-                        (IARM_Bus_EventContext_t *)cctx->handler(eventData->owner, eventData->id, (void *)&eventData->data, eventData->len);
+                        cctx->handler(eventData->owner, eventData->id, (void *)&eventData->data, eventData->len);
                 }
             } else {
                     log("Event Handler got cctx NULL.\r\n");
