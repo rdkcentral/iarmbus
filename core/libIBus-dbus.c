@@ -1172,7 +1172,10 @@ static void _EventHandler_FuncWrapper (void *ctx, void *arg)
     IARM_EventData_t *eventData = (IARM_EventData_t *)arg;
     IARM_Bus_EventContext_t *cctx = NULL;
 
+    // ARUN TEST: check if a status file and lock if present - /opt/ENABLE_IBUS_LOCK
+    if (access("/opt/ENABLE_IBUS_LOCK", F_OK) == 0) {
     IBUS_Lock(lock);
+    }
 
     GList *event_list = g_list_first(m_eventHandlerList);
 
@@ -1193,7 +1196,10 @@ static void _EventHandler_FuncWrapper (void *ctx, void *arg)
             }
         } while ((event_list = g_list_next(event_list)) != NULL);
     }
+    // ARUN TEST: check if a status file and lock if present - /opt/ENABLE_IBUS_LOCK
+    if (access("/opt/ENABLE_IBUS_LOCK", F_OK) == 0) {
     IBUS_Unlock(lock);
+    }
 }
 
 #define PID_BUF_SIZE 100
