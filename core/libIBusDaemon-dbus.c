@@ -137,9 +137,11 @@ static IARM_Result_t _RegisterMember(void *arg)
     errno_t rc = -1;
 
     if (NULL == member) {
+	    log("_RegisterMember: memory alloc failed, returning OOM.\r\n");
 	    return IARM_RESULT_OOM;
     }
     if (NULL == arg) {
+	    log("_RegisterMember: arg is NULL, returning INVALID_PARAM.\r\n");
 	    free(member);
 	    return IARM_RESULT_INVALID_PARAM;
     }
@@ -151,6 +153,7 @@ static IARM_Result_t _RegisterMember(void *arg)
 
     //log("Entering [%s] - [%s]\r\n", __FUNCTION__, member->selfName);
     if (strlen(member->selfName) == 0) {
+	    log("_RegisterMember: member->selfName is NONE, returning INVALID_PARAM.\r\n");
 	    free(member);
 	    return IARM_RESULT_INVALID_PARAM;
     }
