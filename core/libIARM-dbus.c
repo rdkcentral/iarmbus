@@ -1293,6 +1293,9 @@ IARM_Result_t IARM_Term(void)
 
         pthread_mutex_destroy(&(cctx->mutexConn));
         pthread_cond_destroy(&(cctx->condConn));
+        dbus_connection_unref(cctx->conn);
+        dbus_connection_unref(cctx->connMethodCall);
+        dbus_connection_unref(cctx->connEvent);
         IARM_Free(IARM_MEMTYPE_PROCESSLOCAL, cctx);
         DumpMemStat();
         m_grpCtx = NULL;
