@@ -107,6 +107,7 @@ IARM_Result_t IARM_Bus_Init(const char *name)
     errno_t rc = -1;
     IARM_Result_t retCode = IARM_RESULT_SUCCESS;
 
+        log("Entering  %s : %d  connected: :%d \r\n",__FUNCTION__, m_initialized,m_connected);
 
     IARM_ASSERT(!m_initialized && !m_connected);
 
@@ -212,6 +213,7 @@ IARM_Result_t IARM_Bus_Connect(void)
 {
     IARM_Result_t retCode = IARM_RESULT_SUCCESS;
 
+        log("Entering  %s : %d  connected: :%d \r\n",__FUNCTION__, m_initialized,m_connected);
     IARM_ASSERT(m_initialized && !m_connected);
 
     IBUS_Lock(lock);
@@ -334,7 +336,8 @@ IARM_Result_t IARM_Bus_RegisterEventHandler(const char *ownerName, IARM_EventId_
 {
     IARM_Result_t retCode = IARM_RESULT_SUCCESS;
 
-	/*log("Entering [%s] - [%s][%d][%p]\r\n", __FUNCTION__, ownerName, eventId, handler);*/
+	log("Entering [%s] - [%s][%d][%p]\r\n", __FUNCTION__, ownerName, eventId, handler);
+        log("Entering  %s : %d  connected: :%d \r\n",__FUNCTION__, m_initialized,m_connected);
 
 	IARM_ASSERT(m_initialized && m_connected);
 
