@@ -54,7 +54,7 @@ all: clean executable
 
 executable: $(OBJS)
 	@echo "Creating Final Executable ..$(EXECUTABLE) "
-	$(CXX) $(CFLAGS) $(LDFLAGS) $(OBJS) -o $(EXECUTABLE)
+	$(CXX) $(CFLAGS) $(OBJS) -o $(EXECUTABLE) $(LDFLAGS)
 
 %.o: %.c
 	@echo "Building $@ ...."

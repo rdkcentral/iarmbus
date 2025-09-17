@@ -68,11 +68,11 @@ all: clean library executable
 
 library: $(OBJS)
 	@echo "Building $(LIBNAMEFULL) ...."
-	$(CXX) $(OBJS) $(CFLAGS) $(LDFLAGS) -shared -o $(LIBNAMEFULL)
+	$(CXX) $(OBJS) $(CFLAGS) -shared -o $(LIBNAMEFULL) $(LDFLAGS)
 
 ifeq ($(USE_DBUS),y)
 executable: IARMDaemonMain-dbus.o library
-	$(CXX) $(OBJS) $(CFLAGS) $(LDFLAGS) IARMDaemonMain-dbus.o -o $(EXECUTABLE)
+	$(CXX) $(OBJS) $(CFLAGS) IARMDaemonMain-dbus.o -o $(EXECUTABLE) $(LDFLAGS)
 else
 executable: IARMDaemonMain.o library
 	$(CXX) $(OBJS) $(CFLAGS) $(LDFLAGS) IARMDaemonMain.o -o $(EXECUTABLE)
