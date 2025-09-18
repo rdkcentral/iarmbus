@@ -24,7 +24,7 @@ OnFailure=reboot-notifier@%i.service
 
 [Service]
 Type=notify
-ExecStart=/usr/bin/IARMDaemonMain >& /var/volatile/log/iarmbusd.log
+ExecStart=/bin/sh -c '/usr/bin/IARMDaemonMain >& /var/volatile/log/iarmbusd.log'
 
 [Install]
 WantedBy=multi-user.target
