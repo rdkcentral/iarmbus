@@ -20,7 +20,6 @@
 Description=IARM Bus Daemon
 DefaultDependencies=no
 After=dbus.service
-OnFailure=reboot-notifier@%i.service
 
 [Service]
 Type=notify
