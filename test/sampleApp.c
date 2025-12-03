@@ -66,6 +66,8 @@ int main(int argc, char *argv[])
 
     IARM_Bus_Disconnect();
     IARM_Bus_Term();
+    // Copilot fix: Added return statement to satisfy function signature
+    return 0;
 }
 
 

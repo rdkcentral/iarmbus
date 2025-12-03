@@ -36,6 +36,8 @@ int main(int argc, char *argv[])
 	IARM_BarMgr_Start(argc, argv);
 	IARM_BarMgr_Loop();
 	IARM_BarMgr_Stop();
+	// Copilot fix: Added return statement to satisfy function signature
+	return 0;
 }
 
 
