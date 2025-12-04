@@ -416,6 +416,8 @@ IARM_Result_t IARM_RegisterCall(const char *ownerName, const char *callName, IAR
         if(!dbus_connection_add_filter(cctx->conn, &dbusCallHandler, (void *)callInfo, &free))
         {
             log("%s ERROR dbus_connection_add_filter failed\n", __FUNCTION__);
+            // Copilot fix: Added free(callInfo) to prevent memory leak on error path
+            free(callInfo);
             return IARM_RESULT_INVALID_PARAM;
         }
         
