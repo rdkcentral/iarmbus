@@ -26,6 +26,8 @@
 #include <pthread.h>
 #include <sys/types.h>
 #include <sys/syscall.h>
+#include <stdexcept>
+#include <exception>
 #include "iarmUtil.h"
 
 #include "safec_lib.h"
@@ -75,6 +77,7 @@ extern "C"
 
 #define METHOD_CALL_EXIT (1)
 #define DISPATCH_EXIT (1<<1)
+#define DISPATCH_TERMINATE (1<<2)
 
 #define IARM_BUS_NAME_MAX_LEN 100
 
@@ -227,19 +230,29 @@ IARM_Result_t IARM_Free(IARM_MemType_t type, void *alloc)
 
 DBusHandlerResult dbusCallHandler(DBusConnection *connection, DBusMessage *msg, void *user_data)
 {
-    IARM_UICall_t *callInfo = (IARM_UICall_t *)user_data;
+    try {
+        if (user_data == NULL) {
+            printf("IARM: user_data is NULL in dbusCallHandler\n");
+            return DBUS_HANDLER_RESULT_HANDLED;
+        }
 
-    // check if the message is a signal from the correct interface and with the correct name
-    if (dbus_message_has_interface(msg, "iarm.signal.Type"))
-    {
-        IARM_UIEvent_t *eventInfo = (IARM_UIEvent_t *)user_data;
-        IARM_Ctx_t *cctx = (IARM_Ctx_t *)eventInfo->cctx;
+        IARM_UICall_t *callInfo = (IARM_UICall_t *)user_data;
 
-        DBusMessageIter arglist, arraylist;
-        unsigned int eventId;
-        int size;
-        void *eventArg;
-        char *pOwnerName;
+        // check if the message is a signal from the correct interface and with the correct name
+        if (dbus_message_has_interface(msg, "iarm.signal.Type"))
+        {
+            IARM_UIEvent_t *eventInfo = (IARM_UIEvent_t *)user_data;
+            if (eventInfo == NULL || eventInfo->cctx == NULL) {
+                printf("IARM: eventInfo or cctx is NULL in dbusCallHandler \n");
+                return DBUS_HANDLER_RESULT_HANDLED;
+            }
+            IARM_Ctx_t *cctx = (IARM_Ctx_t *)eventInfo->cctx;
+
+            DBusMessageIter arglist, arraylist;
+            unsigned int eventId;
+            int size;
+            void *eventArg;
+            char *pOwnerName;
 
         // filter out our own notifications
         if (dbus_message_has_member(msg, cctx->memberName))
@@ -337,6 +350,13 @@ DBusHandlerResult dbusCallHandler(DBusConnection *connection, DBusMessage *msg, 
         dbus_message_iter_recurse(&arglist, &arraylist);
         dbus_message_iter_get_fixed_array(&arraylist, (void *)&callArg, &size);
         callArg += _IARM_MEM_EXTRA_ALLOC_SIZE;
+        
+        // Add null check for callInfo before using it
+        if (callInfo == NULL || callInfo->handler == NULL) {
+            printf("IARM: callInfo or handler is NULL in dbusCallHandler\n");
+            return DBUS_HANDLER_RESULT_HANDLED;
+        }
+        
         callInfo->handler(callInfo->callCtx, 0, (void *)callArg, (void *)msg);
         return DBUS_HANDLER_RESULT_HANDLED;   
         }
@@ -347,7 +367,16 @@ DBusHandlerResult dbusCallHandler(DBusConnection *connection, DBusMessage *msg, 
 
 ignore:
     
-    return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;   
+    return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
+    }
+    catch (const std::exception& e) {
+        printf("IARM: Exception caught in dbusCallHandler: %s\n", e.what());
+        return DBUS_HANDLER_RESULT_HANDLED;
+    }
+    catch (...) {
+        printf("IARM: Unknown exception caught in dbusCallHandler\n");
+        return DBUS_HANDLER_RESULT_HANDLED;
+    }
 }
 
 /**
@@ -1003,10 +1032,30 @@ void *dispatchThread(void *arg)
 {
     IARM_Ctx_t *cctx = (IARM_Ctx_t *)arg;
 
-    //log("%s %s launched\n", __FUNCTION__, cctx->memberName);
+    log("%s %s launched\n", __FUNCTION__, cctx->memberName);
     /* just loop, dispatching messages until the connection is closed */
-    while (dbus_connection_read_write_dispatch (cctx->conn, 500)){}
-   // log("%s %s connection closed\n", __FUNCTION__, cctx->memberName);
+    try {
+      while (1) {
+        pthread_mutex_lock(&(cctx->mutexConn));
+        if (cctx->exitStatus & DISPATCH_TERMINATE) {
+            pthread_mutex_unlock(&(cctx->mutexConn));
+            break;
+        }
+        pthread_mutex_unlock(&(cctx->mutexConn));
+        
+        if (!cctx->conn || !dbus_connection_read_write_dispatch(cctx->conn, 500)) {
+            break;
+        }
+    }
+    }
+    catch (const std::exception& e) {
+        printf("IARM: Exception caught in dispatchThread during dbus_connection_read_write_dispatch: %s\n", e.what());
+    }
+    catch (...) {
+        printf("IARM: Connection may have been closed during message processing - continuing shutdown\n");
+    }
+    
+    log("%s %s connection closed\n", __FUNCTION__, cctx->memberName);
     pthread_mutex_lock(&(cctx->mutexConn));
     cctx->exitStatus = cctx->exitStatus|DISPATCH_EXIT;
     pthread_cond_signal(&(cctx->condConn));
@@ -1263,10 +1312,20 @@ IARM_Result_t IARM_Term(void)
         retCode = IARM_RESULT_INVALID_PARAM;
     }
 
-    //log("Entering [%s]\r\n", __FUNCTION__);
+    log("Entering [%s]\r\n", __FUNCTION__);
 
     if (retCode == IARM_RESULT_SUCCESS) {
         cctx->isActive = 0;
+      
+        /* Signal threads to exit BEFORE closing connections */
+        pthread_mutex_lock(&(cctx->mutexConn));
+         cctx->exitStatus = cctx->exitStatus|DISPATCH_TERMINATE;
+        pthread_mutex_unlock(&(cctx->mutexConn));
+
+        /* Wait for threads to complete before closing connections */
+        pthread_join(cctx->thread, NULL);
+
+        /* Now safe to close connections */
 
         dbus_connection_close(cctx->conn);
         dbus_connection_close(cctx->connMethodCall);
@@ -1287,10 +1346,7 @@ IARM_Result_t IARM_Term(void)
 			}
         }
         DumpRegisteredComponents(cctx);
-        while( cctx->exitStatus != (DISPATCH_EXIT))
-        {
-              pthread_cond_wait(&(cctx->condConn),&(cctx->mutexConn));
-        }
+
         pthread_mutex_unlock (&(cctx->mutexConn));
 
         pthread_mutex_destroy(&(cctx->mutexConn));
