@@ -1052,7 +1052,7 @@ void *dispatchThread(void *arg)
         printf("IARM: Exception caught in dispatchThread during dbus_connection_read_write_dispatch: %s\n", e.what());
     }
     catch (...) {
-        printf("IARM: Connection may have been closed during message processing - continuing shutdown\n");
+        printf("IARM: Unknown exception caught during message processing - continuing shutdown\n");
     }
     
     log("%s %s connection closed\n", __FUNCTION__, cctx->memberName);
