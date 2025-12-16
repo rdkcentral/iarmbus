@@ -242,8 +242,8 @@ DBusHandlerResult dbusCallHandler(DBusConnection *connection, DBusMessage *msg, 
         if (dbus_message_has_interface(msg, "iarm.signal.Type"))
         {
             IARM_UIEvent_t *eventInfo = (IARM_UIEvent_t *)user_data;
-            if (eventInfo == NULL || eventInfo->cctx == NULL) {
-                printf("IARM: eventInfo or cctx is NULL in dbusCallHandler \n");
+            if (eventInfo->cctx == NULL) {
+                printf("IARM: cctx is NULL in dbusCallHandler \n");
                 return DBUS_HANDLER_RESULT_HANDLED;
             }
             IARM_Ctx_t *cctx = (IARM_Ctx_t *)eventInfo->cctx;
