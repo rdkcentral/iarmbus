@@ -1323,7 +1323,10 @@ IARM_Result_t IARM_Term(void)
         pthread_mutex_unlock(&(cctx->mutexConn));
 
         /* Wait for threads to complete before closing connections */
-        pthread_join(cctx->thread, NULL);
+        int join_ret = pthread_join(cctx->thread, NULL);
+        if (join_ret != 0) {
+            log("Error: pthread_join failed with code %d (%s)\r\n", join_ret, strerror(join_ret));
+        }
 
         /* Now safe to close connections */
 
