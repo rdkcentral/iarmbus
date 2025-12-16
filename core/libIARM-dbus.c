@@ -350,13 +350,12 @@ DBusHandlerResult dbusCallHandler(DBusConnection *connection, DBusMessage *msg, 
         dbus_message_iter_recurse(&arglist, &arraylist);
         dbus_message_iter_get_fixed_array(&arraylist, (void *)&callArg, &size);
         callArg += _IARM_MEM_EXTRA_ALLOC_SIZE;
-        
+
         // Add null check for callInfo before using it
         if (callInfo == NULL || callInfo->handler == NULL) {
             printf("IARM: callInfo or handler is NULL in dbusCallHandler\n");
             return DBUS_HANDLER_RESULT_HANDLED;
         }
-        
         callInfo->handler(callInfo->callCtx, 0, (void *)callArg, (void *)msg);
         return DBUS_HANDLER_RESULT_HANDLED;   
         }
