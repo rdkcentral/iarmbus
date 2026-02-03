@@ -108,6 +108,8 @@ IARM_Result_t IARM_Bus_Init(const char *name)
 
     IBUS_Lock(lock);
 
+    log("Mani IARM_Bus_Init: %s \r\n",name);
+
 	if (!m_initialized && !m_connected) {
 
 		void *gctx = NULL;
@@ -147,12 +149,12 @@ IARM_Result_t IARM_Bus_Term(void)
     IARM_ASSERT(m_initialized && !m_connected);
 
     IBUS_Lock(lock);
-	log("term start init %d\r\n", m_initialized);
+	log("Mani term start init %d\r\n", m_initialized);
 
     if (m_initialized && !m_connected) {
     	
 		{
-            //log("Removing registered event handlers %p\r\n",m_eventHandlerList);
+            log("Mani Removing registered event handlers %p\r\n",m_eventHandlerList);
  			GList *list;
 			for (list = m_eventHandlerList; list != NULL ; list = list->next)
 			{
@@ -166,7 +168,7 @@ IARM_Result_t IARM_Bus_Term(void)
 
     	{
       
-			//log("Removing registered calls ..%p\r\n",m_registeredCallList);
+			log("Mani Removing registered calls ..%p\r\n",m_registeredCallList);
 			GList *list;
 			for (list = m_registeredCallList; list != NULL ; list = list->next)
 			{
@@ -309,6 +311,8 @@ IARM_Result_t IARM_Bus_BroadcastEvent(const char *ownerName, IARM_EventId_t even
 		}
 
 		//log("[%s\r\n", __FUNCTION__);
+        if(strstr(ownerName,"DSMgr") != 0)
+          log("Mani %s   [%s][%d]  \r\n",__FUNCTION__, ownerName, eventId);
         retCode = IARM_NotifyEvent(ownerName, (IARM_EventId_t)eventId, (void *)eventData);
         if (retCode != IARM_RESULT_SUCCESS) {
             log("%s failed to send notification\n", __FUNCTION__);
@@ -352,7 +356,7 @@ IARM_Result_t IARM_Bus_RegisterEventHandler(const char *ownerName, IARM_EventId_
 {
     IARM_Result_t retCode = IARM_RESULT_SUCCESS;
 
-	//log("Entering [%s] - [%s][%d][%p]\r\n", __FUNCTION__, ownerName, eventId, handler);
+	log("Mani Entering [%s] - [%s][%d][%p]\r\n", __FUNCTION__, ownerName, eventId, handler);
 
 	IARM_ASSERT(m_initialized && m_connected);
 
@@ -377,6 +381,9 @@ IARM_Result_t IARM_Bus_RegisterEventHandler(const char *ownerName, IARM_EventId_
     		cctx->eventId = eventId;
     		cctx->handler = handler;
 
+            if(strstr(ownerName,"DSMgr") != 0)
+                log("Mani before  IARM_Bus_RegisterEventHandler  [%s][%d] with IARM Core Handler m_eventHandlerList:%p count: %d \r\n", ownerName, eventId, m_eventHandlerList, g_list_length(m_eventHandlerList));
+
             if(g_list_find_custom(m_eventHandlerList,cctx,_Is_Context_Handler_Matching))
             {
         	    log("Error: Owner [%s] tries to resgister duplicate handler for events ID [%d]\r\n", ownerName, eventId);
@@ -385,7 +392,9 @@ IARM_Result_t IARM_Bus_RegisterEventHandler(const char *ownerName, IARM_EventId_
             }
             else
             {
-    	        //log("Adding Event Handler for [%s][%d] \r\n", ownerName, eventId);   
+    	        //log("Adding Event Handler for [%s][%d] \r\n", ownerName, eventId);
+                if(strstr(ownerName,"DSMgr") != 0)
+                    log("Mani Adding Event Handler for [%s][%d] handler:%p \r\n", ownerName, eventId,handler);   
                 if( NULL ==  g_list_find_custom(m_eventHandlerList,cctx,_Is_Context_Matching) )
                 {
                     m_eventHandlerList = g_list_prepend(m_eventHandlerList, cctx);
@@ -702,6 +711,9 @@ IARM_Result_t IARM_Bus_Call(const char *ownerName,  const char *methodName, void
 
     IBUS_Lock(lock);
 
+    if(strstr(ownerName,"DSMgr") != 0 )
+        log("Mani IARM_Bus_Call to  [%s]-[%s] \r\n", ownerName, methodName);
+
     if (m_initialized && m_connected) {
         void *argOut = NULL;
         
@@ -752,6 +764,9 @@ IARM_Result_t IARM_Bus_Call(const char *ownerName,  const char *methodName, void
 		log("%s failed to call %s as this process is in invalid state isInitialized:%d isConnected:%d \n", __FUNCTION__, methodName, m_initialized, m_connected);
     }
     IBUS_Unlock(lock);
+
+    if(strstr(ownerName,"DSMgr") != 0 )
+        log("Mani Exiting IARM_Bus_Call to  [%s]-[%s] with retCode %d \r\n", ownerName, methodName, retCode);
 
     return retCode;
 }

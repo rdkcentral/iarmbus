@@ -241,6 +241,9 @@ DBusHandlerResult dbusCallHandler(DBusConnection *connection, DBusMessage *msg, 
         void *eventArg;
         char *pOwnerName;
 
+        if(strstr(eventInfo->ownerName,"DSMgr") != 0  )
+           log("Amit: patel: %s   dbusCallHandler  inside signal [%s][%d] listner:%p cctx: %p callCtx:%p \r\n",__FUNCTION__, eventInfo->ownerName,eventInfo->eventId,eventInfo->listener,eventInfo->cctx,eventInfo->callCtx);
+
         // filter out our own notifications
         if (dbus_message_has_member(msg, cctx->memberName))
         {
@@ -302,7 +305,11 @@ DBusHandlerResult dbusCallHandler(DBusConnection *connection, DBusMessage *msg, 
                     
         dbus_message_iter_recurse(&arglist, &arraylist);
         dbus_message_iter_get_fixed_array(&arraylist, &eventArg, &size);
+        if(strstr(eventInfo->ownerName,"DSMgr") != 0  )
+           log("Amit: %s   calling listner  [%s][%d] listner :%p \r\n",__FUNCTION__, eventInfo->ownerName,eventInfo->eventId,eventInfo->listener);
         eventInfo->listener(eventInfo->callCtx, eventArg);
+        if(strstr(eventInfo->ownerName,"DSMgr") != 0  )
+           log("Amit: %s    returned listner  [%s][%d] listner :%p \r\n",__FUNCTION__, eventInfo->ownerName,eventInfo->eventId,eventInfo->listener);
 
         /* TODO: Add return DBUS_HANDLER_RESULT_HANDLED; here */
     }
@@ -847,6 +854,9 @@ IARM_Result_t IARM_NotifyEvent(const char *ownerName,  IARM_EventId_t eventId, v
             dbus_message_unref(msg);
             return IARM_RESULT_INVALID_PARAM;
         }
+
+        if(strstr(ownerName,"DSMgr") != 0 )
+           log("Amit :%s _connection_send [%s][%d]  \r\n", __FUNCTION__ ,ownerName, eventId);
         
         /* send the message and flush the connection */
         if (!dbus_connection_send(cctx->connEvent, msg, &serial))
@@ -912,6 +922,9 @@ IARM_Result_t IARM_RegisterListner(const char *ownerName, IARM_EventId_t eventId
             return IARM_RESULT_INVALID_PARAM;
         }
         cctx->eventRegistry = g_list_prepend(cctx->eventRegistry,eventInfo);
+
+        if(strstr(ownerName,"DSMgr") != 0 )
+           log("Amit IARM_RegisterListner for owner: [%s][%d] listner :%p cctx:%p callCtx :%p \r\n", ownerName, eventId,listener,cctx,callCtx);
 
                 /* Register the component */
                 Component_Node_t *compNode = NULL;
