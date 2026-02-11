@@ -24,6 +24,7 @@
 #include <stddef.h>
 #include <sys/syscall.h>
 #include <unistd.h>
+#include <telemetry_busmessage_sender.h>
 
 #define __TIMESTAMP() do { /*YYMMDD-HH:MM:SS:usec*/               \
             struct tm __tm;                                             \
@@ -65,6 +66,21 @@
 }while(0)
 
 typedef void (*IARM_Bus_LogCb)(const char *);
+
+#define T2_EVENT_STRING(marker, value) \
+    do { \
+        t2_event_s((char*)marker, (char*)value); \
+    } while(0)
+
+#define T2_EVENT_FLOAT(marker, value) \
+    do { \
+        t2_event_f((char*)marker, (double)value); \
+    } while(0)
+
+#define T2_EVENT_INT(marker, value) \
+    do { \
+        t2_event_d((char*)marker, (int)value); \
+    } while(0)
 
 #ifdef __cplusplus
 extern "C" 

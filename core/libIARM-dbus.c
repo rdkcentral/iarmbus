@@ -590,6 +590,12 @@ IARM_Result_t IARM_CallWithTimeout(const char *ownerName,  const char *funcName,
         {
             if (dbus_error_is_set(&error) == TRUE) {
                log("dbus_connection_send_with_reply_and_block failed with error %s \r\n", error.message);
+               if(error.message == "The maximum number of pending"){
+                    T2_EVENT_STRING("SYST_WARN_DbusPwFail", "dbus_connection_send_with_reply_and_block failed with error %s \r\n", error.message);
+               }
+               if(error.message == "The maximum number of pending replies per connection has been reached"){
+                    T2_EVENT_STRING("SYST_ERROR_DBUSErr", "dbus_connection_send_with_reply_and_block failed with error %s \r\n", error.message);
+               }
                dbus_error_free(&error);
             } else {
                 log("dbus_connection_send_with_reply_and_block failed \r\n");
