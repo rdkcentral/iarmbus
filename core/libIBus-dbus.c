@@ -760,7 +760,7 @@ IARM_Result_t IARM_Bus_Call(const char *ownerName,  const char *methodName, void
 IARM_Result_t IARM_Bus_RegisterEvent(int maxEventId)
 {
     IARM_Result_t retCode = IARM_RESULT_SUCCESS;
-	/*log("Entering [%s] - [%d]\r\n", __FUNCTION__, maxEventId);*/
+	log("Entering [%s] - [%d]\r\n", __FUNCTION__, maxEventId);
 
 	IARM_ASSERT(m_initialized && m_connected);
 
@@ -775,6 +775,7 @@ IARM_Result_t IARM_Bus_RegisterEvent(int maxEventId)
 		log("%s invalid state\n", __FUNCTION__);
     }
     IBUS_Unlock(lock);
+	log("Exiting [%s] - [%d]\r\n", __FUNCTION__, maxEventId);*/
     return retCode;
 }
 
