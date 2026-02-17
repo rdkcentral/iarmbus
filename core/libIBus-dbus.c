@@ -775,7 +775,7 @@ IARM_Result_t IARM_Bus_RegisterEvent(int maxEventId)
 		log("%s invalid state\n", __FUNCTION__);
     }
     IBUS_Unlock(lock);
-	log("Exiting [%s] - [%d]\r\n", __FUNCTION__, maxEventId);*/
+	log("Exiting [%s] - [%d]\r\n", __FUNCTION__, maxEventId);
     return retCode;
 }
 
