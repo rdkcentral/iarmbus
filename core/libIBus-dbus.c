@@ -41,6 +41,7 @@
 #include "iarmUtil.h"
 
 #include "safec_lib.h"
+#include <telemetry_busmessage_sender.h>
 
 typedef struct _IARM_Bus_CallContext_t {
 	char ownerName[IARM_MAX_NAME_LEN];
@@ -741,8 +742,10 @@ IARM_Result_t IARM_Bus_Call(const char *ownerName,  const char *methodName, void
             else
                 log("%s failed to invoke %s with retCode %d \n", __FUNCTION__, methodName, retCode);
 
-            if(retCode != IARM_RESULT_SUCCESS)
+            if(retCode != IARM_RESULT_SUCCESS) {
                 log("%s provider returned error (%d) for the method %s \n", __FUNCTION__, retCode, methodName);
+                t2_event_s("SYST_ERR_IARMBusCallHdmi", methodName);
+            }
         }
         else
             log("%s failed to allocated memory for the method invocation %s with retCode %d \n", __FUNCTION__, methodName, retCode);

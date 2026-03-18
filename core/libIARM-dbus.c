@@ -31,6 +31,7 @@
 #include "iarmUtil.h"
 
 #include "safec_lib.h"
+#include <telemetry_busmessage_sender.h>
 
 #ifdef __cplusplus
 extern "C"
@@ -590,11 +591,16 @@ IARM_Result_t IARM_CallWithTimeout(const char *ownerName,  const char *funcName,
         {
             if (dbus_error_is_set(&error) == TRUE) {
                log("dbus_connection_send_with_reply_and_block failed with error %s \r\n", error.message);
+               t2_event_s("SYS_INFO_dbusconnectionfailed", error.message);
                dbus_error_free(&error);
             } else {
                 log("dbus_connection_send_with_reply_and_block failed \r\n");
             }
             log("IARM_Call failed for call %s-%s \r\n",ownerName,funcName);
+            char t2_call_buf[256] = {0};
+            snprintf(t2_call_buf, sizeof(t2_call_buf), "%s-%s", ownerName, funcName);
+            t2_event_s("SYST_ERR_SetPowerState", t2_call_buf);
+            t2_event_s("SYST_WARN_IARMFailBTMgrBus", t2_call_buf);
             dbus_message_unref(msg);
             return IARM_RESULT_INVALID_STATE;
         }
