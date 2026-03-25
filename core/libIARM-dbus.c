@@ -1197,7 +1197,7 @@ IARM_Result_t IARM_Init(const char *groupName, const char *memberName)
             retCode = IARM_RESULT_IPCCORE_FAIL;
             goto error;
         }
-
+        /* coverity[no_effect : FALSE] */
         rc = strcpy_s(cctx->busName,sizeof(cctx->busName), busName);
 	if(rc!=EOK)
 	{
