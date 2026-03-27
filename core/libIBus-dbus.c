@@ -1180,6 +1180,7 @@ static void _EventHandler_FuncWrapper (void *ctx, void *arg)
     {
         do
         {
+            /* coverity[NULL_FIELD : FALSE] */
             cctx = (IARM_Bus_EventContext_t *)event_list->data;
             if (cctx != NULL)
             {

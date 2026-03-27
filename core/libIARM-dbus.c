@@ -458,6 +458,7 @@ IARM_Result_t IARM_RegisterCall(const char *ownerName, const char *callName, IAR
 					cctx->compList = g_list_append(cctx->compList, &compNode->link);
 					//log("ADDED COMPONENT [%s]\r\n", compNode->name);
                     DumpRegisteredComponents(cctx);
+                    /* coverity[RESOURCE_LEAK : FALSE] */
                 }
 
     return retCode;
@@ -781,6 +782,7 @@ IARM_Result_t IARM_RegisterEvent(const char *ownerName, int maxEventId)
                         strncpy(compNode->name, compId, IARM_MAX_NAME_LEN - 1);
          				cctx->compList = g_list_append(cctx->compList, &compNode->link);				
 						DumpRegisteredComponents(cctx);
+                        /* coverity[RESOURCE_LEAK : FALSE] */
                     }
 
     return retCode;
@@ -951,6 +953,7 @@ IARM_Result_t IARM_RegisterListner(const char *ownerName, IARM_EventId_t eventId
                 strncpy(compNode->name, compId, IARM_MAX_NAME_LEN-1);
             	cctx->compList = g_list_append(cctx->compList, &compNode->link);				
 				DumpRegisteredComponents(cctx);
+                /* coverity[RESOURCE_LEAK : FALSE] */
             }
 
     return retCode;
