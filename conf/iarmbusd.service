@@ -23,6 +23,7 @@ After=dbus.service
 
 [Service]
 Type=notify
+ExecStartPre=/bin/sleep 15
 ExecStart=/usr/bin/IARMDaemonMain >& /var/volatile/log/iarmbusd.log
 
 [Install]
