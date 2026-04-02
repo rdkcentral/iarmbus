@@ -1034,6 +1034,12 @@ void *dispatchThread(void *arg)
 {
     IARM_Ctx_t *cctx = (IARM_Ctx_t *)arg;
 
+	log("%s %s Debugging\n", __FUNCTION__, cctx->memberName);
+
+	if (0 == strcmp("mfr_util", cctx->memberName)) {
+		sleep(5);
+	}
+
     log("%s %s launched\n", __FUNCTION__, cctx->memberName);
     /* just loop, dispatching messages until the connection is closed */
     try {
