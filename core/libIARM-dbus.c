@@ -458,6 +458,7 @@ IARM_Result_t IARM_RegisterCall(const char *ownerName, const char *callName, IAR
 					cctx->compList = g_list_append(cctx->compList, &compNode->link);
 					//log("ADDED COMPONENT [%s]\r\n", compNode->name);
                     DumpRegisteredComponents(cctx);
+                    /* The list and its memory will be freed when the cleanup logic is executed like IARM_Term() */
                     /* coverity[RESOURCE_LEAK : FALSE] */
                 }
 
@@ -782,6 +783,7 @@ IARM_Result_t IARM_RegisterEvent(const char *ownerName, int maxEventId)
                         strncpy(compNode->name, compId, IARM_MAX_NAME_LEN - 1);
          				cctx->compList = g_list_append(cctx->compList, &compNode->link);				
 						DumpRegisteredComponents(cctx);
+                        /* The list and its memory will be freed when the cleanup logic is executed like IARM_Term(). */
                         /* coverity[RESOURCE_LEAK : FALSE] */
                     }
 
@@ -953,6 +955,7 @@ IARM_Result_t IARM_RegisterListner(const char *ownerName, IARM_EventId_t eventId
                 strncpy(compNode->name, compId, IARM_MAX_NAME_LEN-1);
             	cctx->compList = g_list_append(cctx->compList, &compNode->link);				
 				DumpRegisteredComponents(cctx);
+                /* The list and its memory will be freed when the cleanup logic is executed like IARM_Term(). */
                 /* coverity[RESOURCE_LEAK : FALSE] */
             }
 
@@ -1200,7 +1203,8 @@ IARM_Result_t IARM_Init(const char *groupName, const char *memberName)
             retCode = IARM_RESULT_IPCCORE_FAIL;
             goto error;
         }
-        /* coverity[no_effect : FALSE] */
+        /* marking as intended */
+        /* coverity[NO_EFFECT : FALSE] */
         rc = strcpy_s(cctx->busName,sizeof(cctx->busName), busName);
 	if(rc!=EOK)
 	{

@@ -161,7 +161,8 @@ static IARM_Result_t _RegisterMember(void *arg)
         log("Found and Unregistering old instance of client - [%s]\r\n", member->selfName);
         _UnRegisterMember(member);
     }
-    /* coverity[resource_leak : FALSE] */
+    /* Entries are released by _UnRegisterMember() */
+    /* coverity[RESOURCE_LEAK : FALSE] */
     m_registeredList = g_list_append(m_registeredList, &member->link);
     _dumpRegisteredMembers();
     return IARM_RESULT_SUCCESS;
