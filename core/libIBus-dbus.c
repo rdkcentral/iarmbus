@@ -212,16 +212,20 @@ IARM_Result_t IARM_Bus_Connect(void)
     IARM_ASSERT(m_initialized && !m_connected);
 
     IBUS_Lock(lock);
+    log("%s:%d [%s] entering: m_initialized=%d, m_connected=%d\n", __FUNCTION__, __LINE__, __FUNCTION__, m_initialized, m_connected);
     if (m_initialized && !m_connected) {
 	retCode = Register();
         if (retCode == IARM_RESULT_SUCCESS) {
+            log("%s:%d [%s] setting m_connected = 1\n", __FUNCTION__, __LINE__, __FUNCTION__);
             m_connected = 1;
+            log("%s:%d [%s] m_connected is now %d\n", __FUNCTION__, __LINE__, __FUNCTION__, m_connected);
         }
     }
     else {
         retCode = IARM_RESULT_INVALID_STATE;
-		log("%s invalid state\n", __FUNCTION__);
+		log("%s:%d [%s] invalid state\n", __FUNCTION__, __LINE__, __FUNCTION__);
     }
+    log("%s:%d [%s] exiting: retCode=%d, m_connected=%d\n", __FUNCTION__, __LINE__, __FUNCTION__, retCode, m_connected);
     IBUS_Unlock(lock);
 
     return retCode;
@@ -243,18 +247,22 @@ IARM_Result_t IARM_Bus_Disconnect(void)
     IARM_ASSERT(m_initialized && m_connected);
 
     IBUS_Lock(lock);
+    log("%s:%d [%s] entering: m_initialized=%d, m_connected=%d\n", __FUNCTION__, __LINE__, __FUNCTION__, m_initialized, m_connected);
     if (m_initialized && m_connected) {
         if (m_member) {
             UnRegister();
+            log("%s:%d [%s] setting m_connected = 0\n", __FUNCTION__, __LINE__, __FUNCTION__);
             m_connected = 0;
+            log("%s:%d [%s] m_connected is now %d\n", __FUNCTION__, __LINE__, __FUNCTION__, m_connected);
         }
         else {
         }
     }
     else {
         retCode = IARM_RESULT_INVALID_STATE;
-		log("%s invalid state\n", __FUNCTION__);
+		log("%s:%d [%s] invalid state\n", __FUNCTION__, __LINE__, __FUNCTION__);
     }
+    log("%s:%d [%s] exiting: retCode=%d, m_connected=%d\n", __FUNCTION__, __LINE__, __FUNCTION__, retCode, m_connected);
     IBUS_Unlock(lock);
     return retCode;
 }
@@ -701,6 +709,7 @@ IARM_Result_t IARM_Bus_Call(const char *ownerName,  const char *methodName, void
 	IARM_ASSERT(m_initialized && m_connected);
 
     IBUS_Lock(lock);
+    log("%s:%d [%s] entering: ownerName=%s, methodName=%s, m_initialized=%d, m_connected=%d\n", __FUNCTION__, __LINE__, __FUNCTION__, ownerName, methodName, m_initialized, m_connected);
 
     if (m_initialized && m_connected) {
         void *argOut = NULL;
@@ -739,18 +748,19 @@ IARM_Result_t IARM_Bus_Call(const char *ownerName,  const char *methodName, void
                 retCode = retVal;
             }
             else
-                log("%s failed to invoke %s with retCode %d \n", __FUNCTION__, methodName, retCode);
+                log("%s:%d [%s] failed to invoke %s with retCode %d\n", __FUNCTION__, __LINE__, __FUNCTION__, methodName, retCode);
 
             if(retCode != IARM_RESULT_SUCCESS)
-                log("%s provider returned error (%d) for the method %s \n", __FUNCTION__, retCode, methodName);
+                log("%s:%d [%s] provider returned error (%d) for the method %s\n", __FUNCTION__, __LINE__, __FUNCTION__, retCode, methodName);
         }
         else
-            log("%s failed to allocated memory for the method invocation %s with retCode %d \n", __FUNCTION__, methodName, retCode);
+            log("%s:%d [%s] failed to allocate memory for the method invocation %s with retCode %d\n", __FUNCTION__, __LINE__, __FUNCTION__, methodName, retCode);
     }
     else {
         retCode = IARM_RESULT_INVALID_STATE;
-		log("%s failed to call %s as this process is in invalid state isInitialized:%d isConnected:%d \n", __FUNCTION__, methodName, m_initialized, m_connected);
+		log("%s:%d [%s] failed to call %s: invalid state isInitialized:%d isConnected:%d\n", __FUNCTION__, __LINE__, __FUNCTION__, methodName, m_initialized, m_connected);
     }
+    log("%s:%d [%s] exiting: ownerName=%s, methodName=%s, retCode=%d\n", __FUNCTION__, __LINE__, __FUNCTION__, ownerName, methodName, retCode);
     IBUS_Unlock(lock);
 
     return retCode;
