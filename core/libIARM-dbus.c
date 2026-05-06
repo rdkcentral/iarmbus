@@ -28,6 +28,7 @@
 #include <sys/syscall.h>
 #include <stdexcept>
 #include <exception>
+#include <sys/prctl.h>
 #include "iarmUtil.h"
 
 #include "safec_lib.h"
@@ -1038,6 +1039,17 @@ void *dispatchThread(void *arg)
     IARM_Ctx_t *cctx = (IARM_Ctx_t *)arg;
 
     log("%s %s launched\n", __FUNCTION__, cctx->memberName);
+
+    // Set thread name: memberName + "_iarmD", max 15 chars for prctl
+    char threadName[16];
+    const char *suffix = "_iarmD";
+    size_t suffixLen = strlen(suffix);
+    // Truncate memberName so total length < 16
+    int maxMemberLen = 15 - (int)suffixLen;
+    if (maxMemberLen < 0) maxMemberLen = 0;
+    snprintf(threadName, sizeof(threadName), "%.*s%s", maxMemberLen, cctx->memberName, suffix);
+    prctl(PR_SET_NAME, threadName, 0, 0, 0);
+
     /* just loop, dispatching messages until the connection is closed */
     try {
       while (1) {
