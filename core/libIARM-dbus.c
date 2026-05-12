@@ -82,6 +82,9 @@ extern "C"
 
 #define IARM_BUS_NAME_MAX_LEN 100
 
+#define IARM_THREAD_NAME_SUFFIX "_IARMD"
+#define IARM_THREAD_NAME_SUFFIX_LEN (sizeof(IARM_THREAD_NAME_SUFFIX) - 1)
+
 int mallocLocalCount;
 int freeLocalCount;
 typedef struct _Component_Node_t {
@@ -1041,13 +1044,11 @@ void *dispatchThread(void *arg)
     log("%s %s launched\n", __FUNCTION__, cctx->memberName);
 
     // Set thread name: memberName + "_iarmD", max 15 chars for prctl
-    char threadName[16];
-    const char *suffix = "_iarmD";
-    size_t suffixLen = strlen(suffix);
+    char threadName[16] = {0};
     // Truncate memberName so total length < 16
-    int maxMemberLen = 15 - (int)suffixLen;
+    int maxMemberLen = 15 - (int)IARM_THREAD_NAME_SUFFIX_LEN;
     if (maxMemberLen < 0) maxMemberLen = 0;
-    snprintf(threadName, sizeof(threadName), "%.*s%s", maxMemberLen, cctx->memberName, suffix);
+    snprintf(threadName, sizeof(threadName), "%.*s%s", maxMemberLen, cctx->memberName, IARM_THREAD_NAME_SUFFIX);
     prctl(PR_SET_NAME, threadName, 0, 0, 0);
 
     /* just loop, dispatching messages until the connection is closed */
