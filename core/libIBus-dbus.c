@@ -108,9 +108,12 @@ IARM_Result_t IARM_Bus_Init(const char *name)
 
     IBUS_Lock(lock);
 
+    log("%s:%s name = %s\r\n", __FILE__, __FUNCTION__, name);
+
 	if (!m_initialized && !m_connected) {
 
 		void *gctx = NULL;
+        log("%s:%s name = %s\r\n", __FILE__, __FUNCTION__, name);
         retCode = IARM_Init(IARM_BUS_NAME, name);
         if (IARM_RESULT_SUCCESS == retCode) {
             IARM_Malloc(IARM_MEMTYPE_PROCESSLOCAL, sizeof(IARM_Bus_Member_t), (void **) &m_member);
@@ -124,16 +127,16 @@ IARM_Result_t IARM_Bus_Init(const char *name)
             m_member->pid = getpid();
             m_member->gctx = gctx;
 
-            log("setting init done\r\n");
+            log("%s:%s setting init done\r\n", __FILE__, __FUNCTION__);
             m_initialized = 1;
         }
         else {
-            log("%s init failed\r\n", __FUNCTION__);
+            log("%s:%s init failed\r\n", __FILE__, __FUNCTION__);
         }
 	}
 	else {
     	retCode = IARM_RESULT_INVALID_STATE;
-		log("%s [%s] Component Already registered with IARM; Invalid state\n", __FUNCTION__, name);
+		log("%s:%s [%s] Component Already registered with IARM; Invalid state\n", __FILE__, __FUNCTION__, name);
 	}
 
 	IBUS_Unlock(lock);

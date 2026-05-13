@@ -1121,12 +1121,12 @@ IARM_Result_t IARM_Init(const char *groupName, const char *memberName)
     int ret;
     char busName[IARM_BUS_NAME_MAX_LEN] = {0};
      
-     //log("%s called \n", __FUNCTION__); 
+    log("%s:%s called \n", __FILE__, __FUNCTION__); 
      
 
     if (!dbus_threads_init_default())
     {
-        log("%s Error dbus_threads_init_default failed", __FUNCTION__);
+        log("%s:%s Error dbus_threads_init_default failed", __FILE__, __FUNCTION__);
     }
      
     if ( groupName == NULL || (strlen(groupName) >= IARM_MAX_NAME_LEN))
@@ -1142,7 +1142,7 @@ IARM_Result_t IARM_Init(const char *groupName, const char *memberName)
 		 retCode = IARM_Malloc(IARM_MEMTYPE_PROCESSLOCAL, sizeof(*cctx), (void **)&cctx);
      }
 
-    log("%s group name = %s member name = %s\n", __FUNCTION__, groupName, memberName);
+    log("%s:%s group name = %s member name = %s\n", __FILE__, __FUNCTION__, groupName, memberName);
 
     if (retCode == IARM_RESULT_SUCCESS)
     {            
@@ -1206,6 +1206,7 @@ IARM_Result_t IARM_Init(const char *groupName, const char *memberName)
         //strcpy(busName, "process.iarm.");
         //strcpy(&busName[13], memberName);
         snprintf(busName, IARM_BUS_NAME_MAX_LEN - 1, "%s%s", "process.iarm.", memberName);
+        log("%s busName = %s \n", __FUNCTION__, busName);
         dbus_error_free(&err);
         ret = dbus_bus_request_name(cctx->conn, busName, DBUS_NAME_FLAG_REPLACE_EXISTING | DBUS_NAME_FLAG_ALLOW_REPLACEMENT, &err);
 
@@ -1219,13 +1220,14 @@ IARM_Result_t IARM_Init(const char *groupName, const char *memberName)
         /* marking as intended */
         /* coverity[NO_EFFECT : FALSE] */
         rc = strcpy_s(cctx->busName,sizeof(cctx->busName), busName);
-	if(rc!=EOK)
-	{
-		ERR_CHK(rc);
-	}
-
+	    if(rc!=EOK)
+        {
+            ERR_CHK(rc);
+        }
+        log("%s cctx->busName = %s \n", __FUNCTION__, cctx->busName);
         dbus_error_free(&err); 
         snprintf(busName, IARM_BUS_NAME_MAX_LEN - 1, "%s%s%s", "process.iarm.", memberName, ".Event");
+        log("%s busName = %s \n", __FUNCTION__, busName);
         ret = dbus_bus_request_name(cctx->connEvent, busName, DBUS_NAME_FLAG_REPLACE_EXISTING | DBUS_NAME_FLAG_ALLOW_REPLACEMENT, &err);
         if ((dbus_error_is_set(&err)) || (DBUS_REQUEST_NAME_REPLY_PRIMARY_OWNER != ret))
         {
@@ -1237,6 +1239,7 @@ IARM_Result_t IARM_Init(const char *groupName, const char *memberName)
 
         dbus_error_free(&err); 
         snprintf(busName, IARM_BUS_NAME_MAX_LEN - 1, "%s%s%s", "process.iarm.", memberName, ".Method");
+        log("%s busName = %s \n", __FUNCTION__, busName);
         ret = dbus_bus_request_name(cctx->connMethodCall, busName, DBUS_NAME_FLAG_REPLACE_EXISTING | DBUS_NAME_FLAG_ALLOW_REPLACEMENT, &err);
         if ((dbus_error_is_set(&err)) || (DBUS_REQUEST_NAME_REPLY_PRIMARY_OWNER != ret))
         {
@@ -1265,6 +1268,7 @@ IARM_Result_t IARM_Init(const char *groupName, const char *memberName)
 
                      m_grpCtx = cctx;
         retCode = IARM_RESULT_SUCCESS;
+        log("%s:%s group name = %s cctx->memberName = %s\n", __FILE__, __FUNCTION__, groupName, cctx-> memberName);
         pthread_create(&(cctx->thread), NULL, &dispatchThread, (void *)cctx);
         //pthread_create(&(cctx->threadMethodCall), NULL, &dispatchThreadMethodCall, (void *)cctx); 
         //log("%s exit  \n", __FUNCTION__); 

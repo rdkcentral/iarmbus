@@ -111,7 +111,7 @@ IARM_Result_t IARM_Bus_Init(const char *name)
     IARM_ASSERT(!m_initialized && !m_connected);
 
     IBUS_Lock(lock);
-
+    log("%s:%s  m_initialized:%d\r\n", __FILE__, __FUNCTION__, m_initialized);
 	if (!m_initialized && !m_connected) {
 
 		void *gctx = NULL;
@@ -127,7 +127,7 @@ IARM_Result_t IARM_Bus_Init(const char *name)
 		m_member->pid = getpid();
 		m_member->gctx = gctx;
 
-		//log("setting init done\r\n");
+		log("%s:%s setting init done\r\n", __FILE__, __FUNCTION__);
 		m_initialized = 1;
 	}
 	else {
