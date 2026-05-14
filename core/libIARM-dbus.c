@@ -28,6 +28,7 @@
 #include <sys/syscall.h>
 #include <stdexcept>
 #include <exception>
+#include <sys/prctl.h>
 #include "iarmUtil.h"
 
 #include "safec_lib.h"
@@ -80,6 +81,9 @@ extern "C"
 #define DISPATCH_TERMINATE (1<<2)
 
 #define IARM_BUS_NAME_MAX_LEN 100
+
+#define IARM_THREAD_NAME_SUFFIX "_IARMD"
+#define IARM_THREAD_NAME_SUFFIX_LEN (sizeof(IARM_THREAD_NAME_SUFFIX) - 1)
 
 int mallocLocalCount;
 int freeLocalCount;
@@ -458,6 +462,8 @@ IARM_Result_t IARM_RegisterCall(const char *ownerName, const char *callName, IAR
 					cctx->compList = g_list_append(cctx->compList, &compNode->link);
 					//log("ADDED COMPONENT [%s]\r\n", compNode->name);
                     DumpRegisteredComponents(cctx);
+                    /* The list and its memory will be freed when the cleanup logic is executed like IARM_Term() */
+                    /* coverity[RESOURCE_LEAK : FALSE] */
                 }
 
     return retCode;
@@ -781,6 +787,8 @@ IARM_Result_t IARM_RegisterEvent(const char *ownerName, int maxEventId)
                         strncpy(compNode->name, compId, IARM_MAX_NAME_LEN - 1);
          				cctx->compList = g_list_append(cctx->compList, &compNode->link);				
 						DumpRegisteredComponents(cctx);
+                        /* The list and its memory will be freed when the cleanup logic is executed like IARM_Term(). */
+                        /* coverity[RESOURCE_LEAK : FALSE] */
                     }
 
     return retCode;
@@ -951,6 +959,8 @@ IARM_Result_t IARM_RegisterListner(const char *ownerName, IARM_EventId_t eventId
                 strncpy(compNode->name, compId, IARM_MAX_NAME_LEN-1);
             	cctx->compList = g_list_append(cctx->compList, &compNode->link);				
 				DumpRegisteredComponents(cctx);
+                /* The list and its memory will be freed when the cleanup logic is executed like IARM_Term(). */
+                /* coverity[RESOURCE_LEAK : FALSE] */
             }
 
     return retCode;
@@ -1032,6 +1042,15 @@ void *dispatchThread(void *arg)
     IARM_Ctx_t *cctx = (IARM_Ctx_t *)arg;
 
     log("%s %s launched\n", __FUNCTION__, cctx->memberName);
+
+    // Set thread name: memberName + "_iarmD", max 15 chars for prctl
+    char threadName[16] = {0};
+    // Truncate memberName so total length < 16
+    int maxMemberLen = 15 - (int)IARM_THREAD_NAME_SUFFIX_LEN;
+    if (maxMemberLen < 0) maxMemberLen = 0;
+    snprintf(threadName, sizeof(threadName), "%.*s%s", maxMemberLen, cctx->memberName, IARM_THREAD_NAME_SUFFIX);
+    prctl(PR_SET_NAME, threadName, 0, 0, 0);
+
     /* just loop, dispatching messages until the connection is closed */
     try {
       while (1) {
@@ -1197,7 +1216,8 @@ IARM_Result_t IARM_Init(const char *groupName, const char *memberName)
             retCode = IARM_RESULT_IPCCORE_FAIL;
             goto error;
         }
-
+        /* marking as intended */
+        /* coverity[NO_EFFECT : FALSE] */
         rc = strcpy_s(cctx->busName,sizeof(cctx->busName), busName);
 	if(rc!=EOK)
 	{

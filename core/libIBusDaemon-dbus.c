@@ -164,6 +164,8 @@ static IARM_Result_t _RegisterMember(void *arg)
 
     m_registeredList = g_list_append(m_registeredList, &member->link);
     _dumpRegisteredMembers();
+    /* Entries are released by _UnRegisterMember() */
+    /* coverity[RESOURCE_LEAK : FALSE] */
     return IARM_RESULT_SUCCESS;
 }
 
