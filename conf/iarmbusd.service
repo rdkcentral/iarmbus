@@ -23,7 +23,17 @@ After=dbus.service
 
 [Service]
 Type=notify
+ExecStartPre=/usr/bin/systemd-run --unit=iarmbus-monitor /bin/sh /usr/lib/iarm-monitor.sh iarmbusd iarmbus
 ExecStart=/usr/bin/IARMDaemonMain >& /var/volatile/log/iarmbusd.log
+# Runs only after READY=1 is confirmed (Type=notify guarantee).
+ExecStartPost=/bin/touch /tmp/iarmbus.ready
+# sent READY=1 — stop the start-phase watchdog (non-blocking).
+ExecStartPost=-/bin/systemctl stop --no-block iarmbus-monitor
+# /opt/.dsmgr_restart_count is removed after dsmgr starts.
+ExecStartPost=/bin/rm -f /opt/.iarmbus_restart_count
+# Stop the watchdog if still running (non-blocking — avoids delaying dsmgr shutdown).
+ExecStop=-/bin/systemctl stop --no-block iarmbus-monitor
+ExecStopPost=/bin/sh /usr/lib/iarm-reboot.sh iarmbusd iarmbus
 
 [Install]
 WantedBy=multi-user.target
