@@ -24,7 +24,7 @@ After=dbus.service
 [Service]
 Type=notify
 ExecStartPre=/usr/bin/systemd-run --unit=iarmbusd-monitor /bin/sh /usr/lib/iarm-monitor.sh iarmbusd IARMDaemonMain
-ExecStart=/bin/sh -c '/usr/bin/IARMDaemonMain'
+ExecStart=/usr/bin/IARMDaemonMain
 # Runs only after READY=1 is confirmed (Type=notify guarantee).
 ExecStartPost=/bin/touch /tmp/iarmbusd.ready
 # IARMDaemonMain sent READY=1 — stop the start-phase watchdog (non-blocking).
