@@ -24,6 +24,7 @@ After=dbus.service
 [Service]
 Type=notify
 ExecStartPre=/usr/bin/systemd-run --unit=iarmbusd-monitor /bin/sh /usr/lib/iarm-monitor.sh iarmbusd IARMDaemonMain
+ExecStartPre=/bin/sh -c '/usr/bin/dbus-monitor --system --pcap > /tmp/dbus.pcap &'
 ExecStart=/usr/bin/IARMDaemonMain
 # Runs only after READY=1 is confirmed (Type=notify guarantee).
 ExecStartPost=/bin/touch /tmp/iarmbusd.ready
