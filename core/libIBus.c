@@ -40,6 +40,7 @@
 #include "iarmUtil.h"
 
 #include "safec_lib.h"
+#include "iarm_otel.h"
 
 typedef struct _IARM_Bus_CallContext_t {
 	char ownerName[IARM_MAX_NAME_LEN];
@@ -66,6 +67,32 @@ static volatile int m_initialized = 0;
 static volatile int m_connected = 0;
 static IARM_Result_t Register(void);
 static IARM_Result_t UnRegister(void);
+
+/* Incoming traceparent exposed to receiver handlers (transport-only model). */
+static __thread char s_iarm_incoming_tp[IARM_OTEL_TP_LEN + 1];
+static __thread int s_iarm_incoming_tp_valid = 0;
+
+static void iarm_otel_clear_incoming_tp(void)
+{
+    s_iarm_incoming_tp[0] = '\0';
+    s_iarm_incoming_tp_valid = 0;
+}
+
+static void iarm_otel_set_incoming_tp(const char *tp)
+{
+    if (tp && iarm_tp_valid(tp)) {
+        memcpy(s_iarm_incoming_tp, tp, IARM_OTEL_TP_LEN);
+        s_iarm_incoming_tp[IARM_OTEL_TP_LEN] = '\0';
+        s_iarm_incoming_tp_valid = 1;
+    } else {
+        iarm_otel_clear_incoming_tp();
+    }
+}
+
+const char *IARM_Bus_GetCurrentIncomingTraceparent(void)
+{
+    return s_iarm_incoming_tp_valid ? s_iarm_incoming_tp : NULL;
+}
 
 static void _BusCall_FuncWrapper(void *callCtx, unsigned long methodID, void *arg, unsigned int serial);
 static void _EventHandler_FuncWrapper (void *ctx, void *arg);
@@ -294,7 +321,10 @@ IARM_Result_t IARM_Bus_BroadcastEvent(const char *ownerName, IARM_EventId_t even
     }
 	else {
         IARM_EventData_t *eventData = NULL;
-        IARM_Malloc(IARM_MEMTYPE_PROCESSSHARE, sizeof(IARM_EventData_t) + len, (void **)&eventData);
+        /* Allocate with IARM_OTEL_SUFFIX_SIZE extra bytes so receivers can always
+         * safely read data[len] for the OTel magic byte, even when no traceparent
+         * is active (suffix is zeroed in that case). */
+        IARM_Malloc(IARM_MEMTYPE_PROCESSSHARE, sizeof(IARM_EventData_t) + len + IARM_OTEL_SUFFIX_SIZE, (void **)&eventData);
 	
 	rc=strcpy_s(eventData->owner,IARM_MAX_NAME_LEN, ownerName);
 	if(rc!=EOK)
@@ -309,6 +339,18 @@ IARM_Result_t IARM_Bus_BroadcastEvent(const char *ownerName, IARM_EventId_t even
 		if(rc!=EOK)
 		{
 			ERR_CHK(rc);
+		}
+
+		/* OTel: zero suffix, then inject traceparent if this thread has an active span */
+		{
+			unsigned char *suffix = (unsigned char *)eventData->data + len;
+			memset(suffix, 0, IARM_OTEL_SUFFIX_SIZE);
+            const char *tp = iarm_otel_get_current_traceparent();
+			if (tp && iarm_tp_valid(tp)) {
+				suffix[0] = IARM_OTEL_EVENT_MAGIC;
+				memcpy(suffix + 1, tp, IARM_OTEL_TP_LEN);
+				suffix[IARM_OTEL_TP_LEN + 1] = '\0';
+			}
 		}
 
 		/*log("[%s\r\n", __FUNCTION__);*/
@@ -558,6 +600,39 @@ IARM_Result_t IARM_Bus_Call(const char *ownerName,  const char *methodName, void
     return retCode;
 }
 
+
+IARM_Result_t IARM_Bus_CallWithTracing(const char *ownerName, const char *methodName, void *arg, size_t argLen)
+{
+    /* If no active span on this thread, fall back to a plain IARM_Bus_Call.
+     * iarm_otel_get_current_traceparent() resolves symbol via dlsym; if the
+     * tracer library is absent or no active span exists, this returns NULL. */
+    const char *tp = iarm_otel_get_current_traceparent();
+    if (!tp || !iarm_tp_valid(tp)) {
+        return IARM_Bus_Call(ownerName, methodName, arg, argLen);
+    }
+
+    /* Build the RPC envelope on the caller's heap (IARM_Bus_Call will copy it
+     * into a shared-memory block internally). */
+    size_t env_size = sizeof(IARM_RPC_Envelope_t) + argLen;
+    IARM_RPC_Envelope_t *env = (IARM_RPC_Envelope_t *)malloc(env_size);
+    if (!env) {
+        return IARM_RESULT_OOM;
+    }
+
+    env->magic = IARM_OTEL_RPC_MAGIC;
+    strncpy(env->traceparent, tp, IARM_OTEL_TP_LEN);
+    env->traceparent[IARM_OTEL_TP_LEN] = '\0';
+    env->inner_len = argLen;
+    memcpy(env->inner_arg, arg, argLen);
+
+    log("Final call (with tracing) to %s-%s\r\n", ownerName, methodName);
+    IARM_Result_t retCode = IARM_Bus_Call(ownerName, methodName, env, env_size);
+
+    /* IARM_Bus_Call copied the handler's result back into env->inner_arg */
+    memcpy(arg, env->inner_arg, argLen);
+    free(env);
+    return retCode;
+}
 
 IARM_Result_t IARM_Bus_RegisterEvent(int maxEventId)
 {
@@ -866,7 +941,21 @@ static void _BusCall_FuncWrapper(void *callCtx, unsigned long methodID, void *ar
 
 	IARM_Bus_CallContext_t *cctx = (IARM_Bus_CallContext_t *)callCtx;
 	IARM_BusCall_t handler = (IARM_BusCall_t)cctx->handler;
-	IARM_Result_t retCode = handler(arg);
+
+    /* OTel transport-only: detect envelope, expose incoming traceparent via
+     * IARM_Bus_GetCurrentIncomingTraceparent(), and pass inner arg to handler. */
+	void *handler_arg = arg;
+    iarm_otel_clear_incoming_tp();
+	if (arg) {
+		IARM_RPC_Envelope_t *env = (IARM_RPC_Envelope_t *)arg;
+        if (env->magic == IARM_OTEL_RPC_MAGIC) {
+            iarm_otel_set_incoming_tp(env->traceparent);
+			handler_arg = env->inner_arg;
+		}
+	}
+
+	IARM_Result_t retCode = handler(handler_arg);
+    iarm_otel_clear_incoming_tp();
 	/*log("Returing [%s] - [%s][%s]\r\n", __FUNCTION__, cctx->ownerName, cctx->methodName);*/
 
 	IARM_CallReturn(cctx->ownerName, cctx->methodName, retCode, serial);
@@ -892,8 +981,20 @@ static void _EventHandler_FuncWrapper (void *ctx, void *arg)
 
 		if (cctx != NULL && cctx->handler != NULL) {
 			/*log("Calling for event [%s][%d]\r\n", eventData->owner, cctx->eventId);*/
+
+            /* OTel transport-only: if suffix is present, expose incoming
+             * traceparent via IARM_Bus_GetCurrentIncomingTraceparent(). */
+            iarm_otel_clear_incoming_tp();
+			{
+				unsigned char *suffix = (unsigned char *)eventData->data + eventData->len;
+				if (suffix[0] == IARM_OTEL_EVENT_MAGIC) {
+					const char *tp = (const char *)(suffix + 1);
+                    iarm_otel_set_incoming_tp(tp);
+				}
+			}
+
 			cctx->handler(eventData->owner, eventData->id, (void *)&eventData->data, eventData->len);
-			
+            iarm_otel_clear_incoming_tp();
 		}
 		else if(cctx != NULL && eventData != NULL) {
 			log("NO  handler for event [%s][%d]\r\n", eventData->owner, cctx->eventId);
