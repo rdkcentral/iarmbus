@@ -306,6 +306,44 @@ IARM_Result_t IARM_Bus_RegisterCall(const char *methodName, IARM_BusCall_t handl
 IARM_Result_t IARM_Bus_Call(const char *ownerName,  const char *methodName, void *arg, size_t argLen);
 
 /**
+ * @brief Invoke an RPC method with OpenTelemetry trace context propagation.
+ *
+ * Identical to IARM_Bus_Call() but wraps the argument in an IARM_RPC_Envelope_t
+ * that carries the caller's current W3C traceparent. The receiving process
+ * can retrieve that parent context via IARM_Bus_GetCurrentIncomingTraceparent()
+ * and decide in handler code whether to create child spans.
+ *
+ * If no active span exists on the calling thread, this function falls back to a
+ * plain IARM_Bus_Call() with zero overhead.
+ *
+ * @param[in] ownerName  Well-known name of the target application.
+ * @param[in] methodName Well-known name of the RPC method.
+ * @param[in] arg        Data structure with input/output parameters.
+ * @param[in] argLen     sizeof(*arg).
+ *
+ * @return Error Code — same set as IARM_Bus_Call().
+ * @retval IARM_RESULT_OOM Indicates heap allocation failure for the envelope.
+ */
+IARM_Result_t IARM_Bus_CallWithTracing(const char *ownerName, const char *methodName, void *arg, size_t argLen);
+
+/**
+ * @brief Get the incoming W3C traceparent currently being dispatched.
+ *
+ * During event/RPC dispatch in patched libIARMBus, this returns the propagated
+ * parent trace context for the current thread if present, else NULL.
+ *
+ * This API enables a transport-only tracing model: IARM only transports
+ * traceparent, and the receiver handler decides whether to start/finish a
+ * child span.
+ *
+ * Thread-local lifetime: valid only within the active handler invocation
+ * (event callback or RPC handler) on the current thread.
+ *
+ * @return Pointer to a 55-char W3C traceparent string, or NULL.
+ */
+const char *IARM_Bus_GetCurrentIncomingTraceparent(void);
+
+/**
  * @brief This API is used to Invoke RPC method by its application name and method
  * name with specified timeout to wait for response.
  *
