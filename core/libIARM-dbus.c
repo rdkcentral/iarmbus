@@ -17,1394 +17,1297 @@
  * limitations under the License.
 */
 
-#include <stdint.h>
-#include <stdio.h>
-#include <unistd.h>
-#include <assert.h>
-#include <string.h>
-#include <stdlib.h>
-#include <pthread.h>
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
+
 #include <sys/types.h>
-#include <sys/syscall.h>
-#include <stdexcept>
-#include <exception>
-#include <sys/prctl.h>
+#include <sys/stat.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <string.h>
+#include <stdio.h>
+#include <stdlib.h>
+
+#include <pthread.h>
+#include <search.h>
+
+#include <glib.h>
+
+#include "libIBus.h"
+#include "libIBusDaemon.h"
+#include "libIARMCore.h"
+#include "libIBusDaemonInternal.h"
 #include "iarmUtil.h"
 
 #include "safec_lib.h"
+#include "iarm_otel.h"
 
-#ifdef __cplusplus
-extern "C"
+typedef struct _IARM_Bus_CallContext_t {
+	char ownerName[IARM_MAX_NAME_LEN];
+	char methodName[IARM_MAX_NAME_LEN];
+	IARM_BusCall_t handler;
+}IARM_Bus_CallContext_t;
+
+typedef struct _IARM_Bus_EventContext_t {
+	char ownerName[IARM_MAX_NAME_LEN];
+	char eventId;
+	IARM_EventHandler_t handler;
+}IARM_Bus_EventContext_t;
+
+static GList *m_registeredCallList = NULL;
+static GList *m_eventHandlerList = NULL;
+
+#define IBUS_Lock(lock) pthread_mutex_lock(&m_Lock)
+#define IBUS_Unlock(lock) pthread_mutex_unlock(&m_Lock)
+
+static pthread_mutex_t m_Lock = PTHREAD_RECURSIVE_MUTEX_INITIALIZER_NP;
+
+static IARM_Bus_Member_t *m_member = NULL;
+
+static volatile int m_initialized = 0;
+static volatile int m_connected = 0;
+static IARM_Result_t Register(void);
+static IARM_Result_t UnRegister(void);
+static IARM_Result_t RegisterPreChange(IARM_Bus_CallContext_t *callCtx);
+
+/* Incoming traceparent exposed to receiver handlers (transport-only model). */
+static __thread char s_iarm_incoming_tp[IARM_OTEL_TP_LEN + 1];
+static __thread int s_iarm_incoming_tp_valid = 0;
+
+static void iarm_otel_clear_incoming_tp(void)
 {
-#endif
-#ifdef __cplusplus
-}
-#endif
-#include <glib.h>
-#include "libIARM.h"
-#include "libIARMCore.h"
-#include "libIBusDaemonInternal.h"
-#include <dbus/dbus.h>
-#include <stdbool.h>
-#include <unistd.h>
-#include <stdio.h>
-#include <stdlib.h>
-#include "iarmUtil.h"
-
-#define _IARM_MEM_MAGIC_SIZE    8
-#define _IARM_MEM_PREFIX_SIZE   sizeof(size_t)
-
-#define _IARM_MEM_DEBUG
-#define _IARM_CTX_HEADER_MAGIC  0xCABFACE1
-
-#ifdef _IARM_MEM_DEBUG
-#define _IARM_MEM_HEADER_MAGIC  0xBADBEEF0
-#define _IARM_MEM_EXTRA_ALLOC_SIZE (_IARM_MEM_MAGIC_SIZE + _IARM_MEM_PREFIX_SIZE)
-#else
-#define _IARM_MEM_EXTRA_ALLOC_SIZE (_IARM_MEM_PREFIX_SIZE)
-#endif
-#define IARM_CALL_PREFIX "_IARMC"
-#define IARM_EVENT_PREFIX "_IARME"
-
-#define IARM_EVENT_MAX 	0xFF
-#define IARM_EventID_IsValid(eventId)  (((eventId) >= 0) && ((eventId) < IARM_EVENT_MAX))
-#define IARM_GrpCtx_IsValid(cctx) ((cctx) && (cctx)->isActive == _IARM_CTX_HEADER_MAGIC)
-
-#ifdef _IARM_MEM_DEBUG
-#define IARM_GetMemType(ptr)  (*((unsigned int *)(((char *)ptr) - _IARM_MEM_MAGIC_SIZE)) - _IARM_MEM_HEADER_MAGIC)
-#endif
-
-#define IARM_GetSize(ptr)  (*((size_t *)(((char *)ptr) - _IARM_MEM_EXTRA_ALLOC_SIZE)))
-
-#define METHOD_CALL_EXIT (1)
-#define DISPATCH_EXIT (1<<1)
-#define DISPATCH_TERMINATE (1<<2)
-
-#define IARM_BUS_NAME_MAX_LEN 100
-
-#define IARM_THREAD_NAME_SUFFIX "_IARMD"
-#define IARM_THREAD_NAME_SUFFIX_LEN (sizeof(IARM_THREAD_NAME_SUFFIX) - 1)
-
-int mallocLocalCount;
-int freeLocalCount;
-typedef struct _Component_Node_t {
-    GList link; 
-    char name[IARM_MAX_NAME_LEN];
-} Component_Node_t;
-
-typedef struct _IARM_Ctxt_t {
-     pthread_mutex_t mutexConn;
-     pthread_cond_t  condConn;
-     pthread_t       thread;
-     pthread_t       threadMethodCall;
-     char            groupName[IARM_MAX_NAME_LEN];
-     char            memberName[IARM_MAX_NAME_LEN];
-     GList           *compList;
-     GList *         eventRegistry;
-     DBusConnection  *conn;
-     DBusConnection  *connMethodCall;
-     DBusConnection  *connEvent;
-     unsigned int    isActive;
-     int             exitStatus;
-     char            busName[IARM_BUS_NAME_MAX_LEN];
-} IARM_Ctx_t;
-
-static IARM_Ctx_t *m_grpCtx = NULL;
-typedef struct _IARM_UICall_t {
-    void *cctx;
-    char callName[IARM_MAX_NAME_LEN];
-    IARM_Call_t handler;
-    void *callCtx;
-} IARM_UICall_t;
-
-typedef struct _IARM_UIEvent_t {
-    void *cctx;
-    IARM_EventId_t  eventId;
-    IARM_Listener_t listener;
-    char ownerName[IARM_MAX_NAME_LEN]; 
-    void *callCtx;
-} IARM_UIEvent_t;
-
-static void DumpRegisteredComponents(IARM_Ctx_t * cctx);
-static void DumpMemStat(void);
-
-void *IARM_GetContext(void)
-{
-	return (void *)m_grpCtx;
-}
-/**
- * @brief Allocate memory for IARM member processes.
- * 
- * This API allows IARM member process to allocate local memory.
- * There are two types of local memory: Process local and thread local. Local memory
- * is only accessible by the process who allocates. 
- *
- * @param [in] grpCtx Context of the process group.
- * @param [in] type Thread-Local, Process-Local or Shared memory.
- * @param [in] size Number of bytes to allocate.
- * @param [out] ptr Return allocated memory.
- * @return IARM_Result_t Error Code.
- */
-IARM_Result_t IARM_Malloc(IARM_MemType_t type, size_t size, void **ptr)
-{
-    IARM_Result_t retCode = IARM_RESULT_OOM;
-    void *alloc = NULL;
-    size_t requestedSize = size;
-
-    size += _IARM_MEM_PREFIX_SIZE; /* DBus needs to know the size of the allocation so that it can pass the
-                                      object by value therefore we code it in the prefix */
-#ifdef _IARM_MEM_DEBUG
-    size += _IARM_MEM_MAGIC_SIZE;
-#endif
-
-    switch(type)
-    {
-            case IARM_MEMTYPE_PROCESSLOCAL:
-                mallocLocalCount++;
-                alloc = malloc(size);
-                break;
-            case IARM_MEMTYPE_THREADLOCAL:
-                /*Not supported, fall through */
-            default:
-                alloc = malloc(size);
-        }
-
-    if (alloc != NULL)
-    {
-        size_t *p = (size_t *)alloc;
-        *p = requestedSize;
-        alloc = ((char *)alloc) + _IARM_MEM_PREFIX_SIZE;
-       
-#ifdef _IARM_MEM_DEBUG
-        unsigned int *m = (unsigned int *)alloc;
-        *m = _IARM_MEM_HEADER_MAGIC + type;
-        alloc = ((char *)alloc) + _IARM_MEM_MAGIC_SIZE;
-#endif
-
-    *ptr = alloc;
-        retCode = IARM_RESULT_SUCCESS;
-    }
-
-
-    return retCode;
+    s_iarm_incoming_tp[0] = '\0';
+    s_iarm_incoming_tp_valid = 0;
 }
 
-/**
- * @brief Free memory allocated by IARM member processes.
- * 
- * This API allows IARM member process to free local memory. 
- * The type specified in the free() API must match that specified in the malloc()
- * call.
- *
- * @param [in] grpCtx Context of the process group. Use NULL if allocating local memory.
- * @param [in] type Thread-Local or Process-Local. This must match the type of the allocated memory.
- * @param [in] alloc Points to the allocated memory to be freed.
- * @return IARM_Result_t Error Code.
- */
-IARM_Result_t IARM_Free(IARM_MemType_t type, void *alloc)
+static void iarm_otel_set_incoming_tp(const char *tp)
 {
-    if (alloc != NULL)
-    {
-
-#ifdef _IARM_MEM_DEBUG
-            alloc = ((char *)alloc) - _IARM_MEM_MAGIC_SIZE;
-            unsigned int *p = (unsigned int *)alloc;
-            int hType  = *p - _IARM_MEM_HEADER_MAGIC;
-/*        IARM_ASSERT(hType == type);*/
-        if (hType != type)
-        {
-            }
-#endif
-        alloc = ((char *)alloc) - _IARM_MEM_PREFIX_SIZE; /* dBus size header */
-        switch(type)
-        {
-                case IARM_MEMTYPE_PROCESSLOCAL:
-                    freeLocalCount++;
-                    free(alloc);
-                    break;
-                case IARM_MEMTYPE_THREADLOCAL:
-                    /*Not supported, fall through */
-                default:
-                    free(alloc);
-            }
-        }
-
-    return IARM_RESULT_SUCCESS;
-}
-
-DBusHandlerResult dbusCallHandler(DBusConnection *connection, DBusMessage *msg, void *user_data)
-{
-    try {
-        if (user_data == NULL) {
-            printf("IARM: user_data is NULL in dbusCallHandler\n");
-            return DBUS_HANDLER_RESULT_HANDLED;
-        }
-
-        IARM_UICall_t *callInfo = (IARM_UICall_t *)user_data;
-
-        // check if the message is a signal from the correct interface and with the correct name
-        if (dbus_message_has_interface(msg, "iarm.signal.Type"))
-        {
-            IARM_UIEvent_t *eventInfo = (IARM_UIEvent_t *)user_data;
-            if (eventInfo->cctx == NULL) {
-                printf("IARM: cctx is NULL in dbusCallHandler \n");
-                return DBUS_HANDLER_RESULT_HANDLED;
-            }
-            IARM_Ctx_t *cctx = (IARM_Ctx_t *)eventInfo->cctx;
-
-            DBusMessageIter arglist, arraylist;
-            unsigned int eventId;
-            int size;
-            void *eventArg;
-            char *pOwnerName;
-
-        // filter out our own notifications
-        if (dbus_message_has_member(msg, cctx->memberName))
-        {
-            /* Allow Member to listen to its own events */
-            //goto ignore;
-        }
-        
-        if(!dbus_message_iter_init(msg, &arglist))
-        {
-            log("%s Error dbus_message_iter_init failed\n", __FUNCTION__); 
-            goto ignore;
-        }
-            
-        if (dbus_message_iter_get_arg_type(&arglist) != DBUS_TYPE_UINT32)
-        {   
-            log("%s Error eventId not found, type is incorrect\n", __FUNCTION__); 
-            goto ignore;
-        }
-
-        dbus_message_iter_get_basic(&arglist, &eventId);
-
-        if(eventId != eventInfo->eventId)
-        {
-            goto ignore;
-        }
-
-        dbus_message_iter_next(&arglist);
-
-        if (dbus_message_iter_get_arg_type(&arglist) != DBUS_TYPE_STRING)
-        {   
-            log("%s Error owner name not found, type is incorrect\n", __FUNCTION__); 
-            goto ignore;
-        }
-
-        dbus_message_iter_get_basic(&arglist, &pOwnerName);
-
-        if(strncmp(pOwnerName,eventInfo->ownerName,IARM_MAX_NAME_LEN) !=0 )
-        {
-            goto ignore;
-        }
-        dbus_message_iter_next(&arglist);
-
-        if (dbus_message_iter_get_arg_type(&arglist) != DBUS_TYPE_UINT32)
-        {   
-            log("%s Error size not found, type is incorrect\n", __FUNCTION__); 
-            goto ignore;
-        }
-
-        dbus_message_iter_get_basic(&arglist, &size);
-
-        dbus_message_iter_next(&arglist);
-
-        if (dbus_message_iter_get_arg_type(&arglist) != DBUS_TYPE_ARRAY ||
-            dbus_message_iter_get_element_type(&arglist) != DBUS_TYPE_BYTE)
-        {   
-            log("%s Error event argument is malformed\n", __FUNCTION__); 
-            goto ignore;
-        }
-                    
-        dbus_message_iter_recurse(&arglist, &arraylist);
-        dbus_message_iter_get_fixed_array(&arraylist, &eventArg, &size);
-        eventInfo->listener(eventInfo->callCtx, eventArg);
-
-        /* TODO: Add return DBUS_HANDLER_RESULT_HANDLED; here */
-    }
-    else if (dbus_message_is_method_call(msg, "iarm.method.Type", callInfo->callName))
-    {
-        DBusMessageIter arglist, arraylist;
-        int size;
-        unsigned char *callArg;
-        
-        if(!dbus_message_iter_init(msg, &arglist))
-        {
-            log("%s ERROR dbus_message_iter_init failed\n", __FUNCTION__);
-            goto ignore;
-        }
-                    
-        if (dbus_message_iter_get_arg_type(&arglist) != DBUS_TYPE_UINT32)
-        {   
-            log("%s ERROR Call argument size not found\n", __FUNCTION__);
-            goto ignore;
-        }
-
-        dbus_message_iter_get_basic(&arglist, &size);
-        dbus_message_iter_next(&arglist);
-        
-        if (dbus_message_iter_get_arg_type(&arglist) != DBUS_TYPE_ARRAY ||
-            dbus_message_iter_get_element_type(&arglist) != DBUS_TYPE_BYTE)
-        {   
-            log("%s Error method call argument is malformed\n", __FUNCTION__); 
-            goto ignore;
-        }
-                    
-        dbus_message_iter_recurse(&arglist, &arraylist);
-        dbus_message_iter_get_fixed_array(&arraylist, (void *)&callArg, &size);
-        callArg += _IARM_MEM_EXTRA_ALLOC_SIZE;
-
-        // Add null check for callInfo before using it
-        if (callInfo == NULL || callInfo->handler == NULL) {
-            printf("IARM: callInfo or handler is NULL in dbusCallHandler\n");
-            return DBUS_HANDLER_RESULT_HANDLED;
-        }
-        callInfo->handler(callInfo->callCtx, 0, (void *)callArg, (void *)msg);
-        return DBUS_HANDLER_RESULT_HANDLED;   
-        }
-    else if (!dbus_message_has_interface(msg, "iarm.method.Type"))
-    {
-        return DBUS_HANDLER_RESULT_HANDLED;   
-    }
-
-ignore:
-    
-    return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
-    }
-    catch (const std::exception& e) {
-        printf("IARM: Exception caught in dbusCallHandler: %s\n", e.what());
-        return DBUS_HANDLER_RESULT_HANDLED;
-    }
-    catch (...) {
-        printf("IARM: Unknown exception caught in dbusCallHandler\n");
-        return DBUS_HANDLER_RESULT_HANDLED;
+    if (tp && iarm_tp_valid(tp)) {
+        memcpy(s_iarm_incoming_tp, tp, IARM_OTEL_TP_LEN);
+        s_iarm_incoming_tp[IARM_OTEL_TP_LEN] = '\0';
+        s_iarm_incoming_tp_valid = 1;
+    } else {
+        iarm_otel_clear_incoming_tp();
     }
 }
 
-/**
- * @brief Register a RPC call so other processes can call.
- * 
- * A process publishes a RPC function using this API.  The RPC call, uniquely 
- * identified by (groupName, memberName, callName), can be invoked using the
- * three names together.
- *
- * A RPC function implemented by one process must publish it first before other
- * process can make a RPC call. Otherwise, the caller will be blocked until
- * the RPC call is published.
- *
- * @param [in] grpCtx Context of the process group.
- * @param [in] ownerName The name of this member process that implements the Call.
- * @param [in] callName The name of the function that this member offers as RPC-Call.
- * @param [in] handler The function that can be called by (ownerName, callName)
- * @param [in] callCtx Local context to passed in when the function is called. 
- *
- * @return IARM_Result_t Error Code.
- */
-IARM_Result_t IARM_RegisterCall(const char *ownerName, const char *callName, IARM_Call_t handler, void *callCtx)
+const char *IARM_Bus_GetCurrentIncomingTraceparent(void)
 {
-    errno_t rc = -1;
+    return s_iarm_incoming_tp_valid ? s_iarm_incoming_tp : NULL;
+}
+
+static void _BusCall_FuncWrapper(void *callCtx, unsigned long methodID, void *arg, void *serial);
+static void _EventHandler_FuncWrapper (void *ctx, void *arg);
+
+#define MAX_LOG_BUFF 200
+
+IARM_Bus_LogCb logCb = NULL;
+
+void IARM_Bus_RegisterForLog(IARM_Bus_LogCb cb)
+{
+    logCb = cb;
+} 
+int log(const char *format, ...)
+{
+    char tmp_buff[MAX_LOG_BUFF];
+    va_list args;
+    va_start(args, format);
+    vsnprintf(tmp_buff,MAX_LOG_BUFF-1,format, args);
+    va_end(args);
+    if(logCb != NULL)
+    {
+        logCb(tmp_buff);
+    }
+    else
+    {
+        return printf(tmp_buff);
+    }
+    return 0;	
+}
+
+IARM_Result_t IARM_Bus_Init(const char *name)
+{
     IARM_Result_t retCode = IARM_RESULT_SUCCESS;
-    IARM_Ctx_t *grpCtx = m_grpCtx;
-    IARM_Ctx_t * cctx = (IARM_Ctx_t *)grpCtx;
-    IARM_UICall_t *callInfo;
+    errno_t rc = -1;
 
-   // log("%s registers %s %s \n", __FUNCTION__, ownerName, callName);
+    IARM_ASSERT(!m_initialized && !m_connected);
 
-    if (!IARM_GrpCtx_IsValid(cctx) || callName == NULL) {
-        retCode = IARM_RESULT_INVALID_PARAM;
+    IBUS_Lock(lock);
+
+	if (!m_initialized && !m_connected) {
+
+		void *gctx = NULL;
+        retCode = IARM_Init(IARM_BUS_NAME, name);
+        if (IARM_RESULT_SUCCESS == retCode) {
+            IARM_Malloc(IARM_MEMTYPE_PROCESSLOCAL, sizeof(IARM_Bus_Member_t), (void **) &m_member);
+
+	    rc = sprintf_s(m_member->selfName,sizeof(m_member->selfName), "%s", name);
+	    if(rc < EOK)
+	    {
+		    ERR_CHK(rc);
+	    }
+
+            m_member->pid = getpid();
+            m_member->gctx = gctx;
+
+            log("setting init done\r\n");
+            m_initialized = 1;
+        }
+        else {
+            log("%s init failed\r\n", __FUNCTION__);
+        }
+	}
+	else {
+    	retCode = IARM_RESULT_INVALID_STATE;
+		log("%s [%s] Component Already registered with IARM; Invalid state\n", __FUNCTION__, name);
+	}
+
+	IBUS_Unlock(lock);
+	return retCode;
+}
+
+IARM_Result_t IARM_Bus_Term(void)
+{
+    IARM_Result_t retCode = IARM_RESULT_SUCCESS;
+
+    IARM_ASSERT(m_initialized && !m_connected);
+
+    IBUS_Lock(lock);
+	log("term start init %d\r\n", m_initialized);
+
+    if (m_initialized && !m_connected) {
+    	
+		{
+            //log("Removing registered event handlers %p\r\n",m_eventHandlerList);
+ 			GList *list;
+			for (list = m_eventHandlerList; list != NULL ; list = list->next)
+			{
+				IARM_Bus_EventContext_t *cctx = (IARM_Bus_EventContext_t *)list->data;
+				IARM_Free(IARM_MEMTYPE_PROCESSLOCAL, (void *)cctx);
+				
+			}
+            g_list_free(m_eventHandlerList);
+			m_eventHandlerList = NULL;
+		}    	
+
+    	{
+      
+			//log("Removing registered calls ..%p\r\n",m_registeredCallList);
+			GList *list;
+			for (list = m_registeredCallList; list != NULL ; list = list->next)
+			{
+				IARM_Bus_CallContext_t *cctx = (IARM_Bus_CallContext_t *)list->data;
+				IARM_Free(IARM_MEMTYPE_PROCESSLOCAL, (void *)cctx);
+				
+			}
+            g_list_free(m_registeredCallList);
+			m_registeredCallList = NULL;
+    	}
+
+        IARM_Free(IARM_MEMTYPE_PROCESSLOCAL, m_member);
+        m_member = NULL;
+		m_initialized = 0;
+		retCode = IARM_Term();
+        if (retCode != IARM_RESULT_SUCCESS) {
+            log("%s Term Failed\n", __FUNCTION__);
+        }
     }
-    else if ( ownerName == NULL || (strlen(ownerName) >= IARM_MAX_NAME_LEN)) {
-    	retCode = IARM_RESULT_INVALID_PARAM;
-    }
-    else if ( callName == NULL || (strlen(callName) >= IARM_MAX_NAME_LEN)) {
+    else {
+    	log("NOT INITD\r\n");
     	retCode = IARM_RESULT_INVALID_PARAM;
     }
 
-    //log("Entering [%s] - [%s][%s][func=%p][callctx=%p]\r\n", __FUNCTION__, ownerName, callName, handler, callCtx);
+    IBUS_Unlock(lock);
+	return retCode;
+}
 
-    if (retCode == IARM_RESULT_SUCCESS) {
-        char compId[IARM_MAX_NAME_LEN] = {0};
-        snprintf(compId, sizeof(compId), "%s_%s_%s", IARM_CALL_PREFIX, ownerName, callName);
+/**
+ * @brief Initialize underlying module for the IARM member.
+ * 
+ * This API allows IARM member to join the U_I_D_E_V world and communicate
+ * to UI Manager and other processes of the same group. The name of the member
+ * must be unique among the process group that it is joining.
+ *
+ * @param [in] name Name of the member process.
+ * @return IARM_Result_t Error Code.
+ */
+IARM_Result_t IARM_Bus_Connect(void)
+{
+    IARM_Result_t retCode = IARM_RESULT_SUCCESS;
 
-        if((callInfo = (IARM_UICall_t *) malloc(sizeof(IARM_UICall_t))) == NULL)
-        {
-            log("%s ERROR malloc failed\n", __FUNCTION__);
-            return  IARM_RESULT_INVALID_PARAM;
+    IARM_ASSERT(m_initialized && !m_connected);
+
+    IBUS_Lock(lock);
+    if (m_initialized && !m_connected) {
+	retCode = Register();
+        if (retCode == IARM_RESULT_SUCCESS) {
+            m_connected = 1;
         }
-
-        memset(callInfo, 0, sizeof(IARM_UICall_t));
-        
-        callInfo->cctx = cctx;
-        callInfo->callCtx = callCtx;
-        callInfo->handler = handler;
-        
-	rc = strcpy_s(callInfo->callName,sizeof(callInfo->callName), callName);
-	if(rc!=EOK)
-	{
-		ERR_CHK(rc);
-	}
-
-        if(!dbus_connection_add_filter(cctx->conn, &dbusCallHandler, (void *)callInfo, &free))
-        {
-            log("%s ERROR dbus_connection_add_filter failed\n", __FUNCTION__);
-            // Copilot fix: Added free(callInfo) to prevent memory leak on error path
-            free(callInfo);
-            return IARM_RESULT_INVALID_PARAM;
-        }
-        
-                    /* Register the component */
-                    Component_Node_t *compNode = NULL;
-                    IARM_Malloc(IARM_MEMTYPE_PROCESSLOCAL, sizeof(Component_Node_t), (void **)&compNode);
-			        /*compNode->comp = comp;*/
-					memset(compNode->name, 0, IARM_MAX_NAME_LEN);
-                    strncpy(compNode->name, compId, IARM_MAX_NAME_LEN- 1);
-					cctx->compList = g_list_append(cctx->compList, &compNode->link);
-					//log("ADDED COMPONENT [%s]\r\n", compNode->name);
-                    DumpRegisteredComponents(cctx);
-                    /* The list and its memory will be freed when the cleanup logic is executed like IARM_Term() */
-                    /* coverity[RESOURCE_LEAK : FALSE] */
-                }
+    }
+    else {
+        retCode = IARM_RESULT_INVALID_STATE;
+		log("%s invalid state\n", __FUNCTION__);
+    }
+    IBUS_Unlock(lock);
 
     return retCode;
 }
 
 /**
- * @brief Make a RPC call 
+ * @brief Terminate IARM module.
  * 
- * Invoke the RPC function by specifying its names.  This call will block until
- * the specified RPC function is published.
+ * This API allows IARM member to quit the U_I_D_E_V world and releases
+ * resources it has allocated.
  *
- * @param [in] grpCtx Context of the process group.
- * @param [in] ownerName The name of member process implementing the RPC call.
- * @param [in] callName The name of the function to call. 
- * @param [in] arg Supply the argument to be used by the RPC call.
- * @param [out] ret Returns the return value of the RPC call.
- *
+ * @param None
  * @return IARM_Result_t Error Code.
  */
-IARM_Result_t IARM_Call(const char *ownerName,  const char *funcName, void *arg, int *ret)
+IARM_Result_t IARM_Bus_Disconnect(void)
 {
-    return IARM_CallWithTimeout(ownerName, funcName, arg, IARM_METHOD_IPC_TIMEOUT_DEFAULT, ret);
+    IARM_Result_t retCode = IARM_RESULT_SUCCESS;
+
+    IARM_ASSERT(m_initialized && m_connected);
+
+    IBUS_Lock(lock);
+    if (m_initialized && m_connected) {
+        if (m_member) {
+            UnRegister();
+            m_connected = 0;
+        }
+        else {
+        }
+    }
+    else {
+        retCode = IARM_RESULT_INVALID_STATE;
+		log("%s invalid state\n", __FUNCTION__);
+    }
+    IBUS_Unlock(lock);
+    return retCode;
 }
 
-
 /**
- * @brief Make a RPC call with timeout
+ * @brief Publish an Asynchronous event.
  *
- * Invoke the RPC function by specifying its names.  This call will block until
- * the specified RPC function is published.
+ * This API allows a process to notify other processes of an asynchronous event.
+ * Upon return of this functioin, all listeners are notified of the event. But
+ * the the listeners may not necessarily complete the processing of this event.
  *
- * @param [in] grpCtx Context of the process group.
- * @param [in] ownerName The name of member process implementing the RPC call.
- * @param [in] callName The name of the function to call.
- * @param [in] arg Supply the argument to be used by the RPC call.
- * @param [in] timeout millisecond time interval to be used for the RPC call.
- * @param [out] ret Returns the return value of the RPC call.
+ * This must not be called from an eventHandler.
+ * eventData must be copied onto shared heap.
+ *
+ * @param [in] eventId The event to publish.
+ * @param [in] eventData Data carried by this event.
  *
  * @return IARM_Result_t Error Code.
  */
-IARM_Result_t IARM_CallWithTimeout(const char *ownerName,  const char *funcName, void *arg, int timeout, int *ret)
+IARM_Result_t IARM_Bus_BroadcastEvent(const char *ownerName, IARM_EventId_t eventId, void *data, size_t len)
 {
     errno_t rc = -1;
     IARM_Result_t retCode = IARM_RESULT_SUCCESS;
-    IARM_Ctx_t *grpCtx = m_grpCtx;
-    IARM_Ctx_t * cctx = (IARM_Ctx_t *)grpCtx;
 
-    DBusMessage* msg;
-    DBusMessageIter arglist, arraylist;
-    DBusMessage *replyMsg;
-    DBusError error;
-    uint32_t size;
-    unsigned char *byteIndex = (unsigned char *)arg, *returnArg;
+    IARM_ASSERT(m_initialized && m_connected);
 
-    if (!IARM_GrpCtx_IsValid(cctx) || ownerName == NULL || funcName == NULL)
-    {
-        retCode = IARM_RESULT_INVALID_PARAM;
+    IBUS_Lock(lock);
+    if (!m_initialized || !m_connected) {
+        retCode = IARM_RESULT_INVALID_STATE;
+		log("%s invalid state\n", __FUNCTION__);
     }
-
-    IARM_ASSERT((arg == NULL) || (IARM_GetMemType(arg) == IARM_MEMTYPE_PROCESSLOCAL));
-
-    if (retCode == IARM_RESULT_SUCCESS)
-    {
-        char serverName[IARM_MAX_NAME_LEN] = {0};
-
-        rc = sprintf_s(serverName, sizeof(serverName), "process.iarm.%s", ownerName);
-	if(rc < EOK)
-	{
-		ERR_CHK(rc);
+	else if (strlen(ownerName) > IARM_MAX_NAME_LEN) {
+        retCode = IARM_RESULT_INVALID_PARAM;
+		log("%s invalid component name\n", __FUNCTION__);
 	}
+    else if (data == NULL) {
+        retCode = IARM_RESULT_INVALID_PARAM;
+		log("%s invalid input data\n", __FUNCTION__);
+    }
+	else {
+        IARM_EventData_t *eventData = NULL;
+        /* Allocate with suffix room so receivers can probe data[len] safely. */
+        IARM_Malloc(IARM_MEMTYPE_PROCESSLOCAL, sizeof(IARM_EventData_t) + len + IARM_OTEL_SUFFIX_SIZE, (void **)&eventData);
+		strncpy(eventData->owner, ownerName, IARM_MAX_NAME_LEN -1);
+		eventData->owner[IARM_MAX_NAME_LEN -1] = '\0';
+		eventData->id = eventId;
+		eventData->len = len;
+		
+		rc = memcpy_s(&eventData->data, len, data, len);
+		if(rc!=EOK)
+		{
+			ERR_CHK(rc);
+		}
 
-        // create a new method call and check for errors
-        msg = dbus_message_new_method_call(serverName, // target for the method call
-                                           "/iarm/method/Object", // object to call on
-                                           "iarm.method.Type", // interface to call on
-                                           funcName); // method name
-
-        if (NULL == msg)
+        /* OTel transport-only: append magic + parent traceparent if available. */
         {
-            log("%s Error dbus_message_new_method_call failed\n", __FUNCTION__);
-            return IARM_RESULT_INVALID_PARAM;
-        }
-
-        /* append arguments onto signal */
-        dbus_message_iter_init_append(msg, &arglist);
-
-        size = (uint32_t) IARM_GetSize(arg);
-        size += _IARM_MEM_EXTRA_ALLOC_SIZE; /* include prefix */
-        byteIndex -= _IARM_MEM_EXTRA_ALLOC_SIZE;
-
-        if (!dbus_message_iter_append_basic(&arglist, DBUS_TYPE_UINT32 , &size))
-        {
-            log("%s Error dbus_message_iter_append_basic failed\n", __FUNCTION__);
-            dbus_message_unref(msg);
-            return IARM_RESULT_INVALID_PARAM;
-        }
-
-        if (!dbus_message_iter_open_container(&arglist, DBUS_TYPE_ARRAY, "y", &arraylist))
-        {
-            log("%s Error dbus_message_iter_open_container failed\n", __FUNCTION__);
-            dbus_message_unref(msg);
-            return IARM_RESULT_INVALID_PARAM;
-        }
-
-        if (!dbus_message_iter_append_fixed_array (&arraylist, DBUS_TYPE_BYTE, (void *)&byteIndex, size))
-        {
-            log("%s Error dbus_message_iter_append_fixed_array failed\n", __FUNCTION__);
-            dbus_message_unref(msg);
-            return IARM_RESULT_INVALID_PARAM;
-        }
-
-        if (!dbus_message_iter_close_container(&arglist, &arraylist))
-        {
-            log("%s Error dbus_message_iter_close_container failed\n", __FUNCTION__);
-            dbus_message_unref(msg);
-            return IARM_RESULT_INVALID_PARAM;
-        }
-
-        /* Block and timeout after 5 sec as default */
-        if (timeout <= IARM_METHOD_IPC_TIMEOUT_DEFAULT)
-            timeout = 5000; /* 5 sec*/
-        else if (timeout == IARM_METHOD_IPC_TIMEOUT_INFINITE)
-            timeout = DBUS_TIMEOUT_INFINITE;
-
-        //log("%s called %s %s sender %s\n", __FUNCTION__, ownerName, funcName, dbus_message_get_sender(msg));
-
-         dbus_error_init(&error);
-        replyMsg = dbus_connection_send_with_reply_and_block(cctx->connMethodCall,msg, timeout, &error);
-        if (!replyMsg) 
-        {
-            if (dbus_error_is_set(&error) == TRUE) {
-               log("dbus_connection_send_with_reply_and_block failed with error %s \r\n", error.message);
-               dbus_error_free(&error);
-            } else {
-                log("dbus_connection_send_with_reply_and_block failed \r\n");
+            unsigned char *suffix = (unsigned char *)eventData->data + len;
+            memset(suffix, 0, IARM_OTEL_SUFFIX_SIZE);
+            const char *tp = iarm_otel_get_current_traceparent();
+            if (tp && iarm_tp_valid(tp)) {
+                suffix[0] = IARM_OTEL_EVENT_MAGIC;
+                memcpy(suffix + 1, tp, IARM_OTEL_TP_LEN);
+                suffix[IARM_OTEL_TP_LEN + 1] = '\0';
             }
-            log("IARM_Call failed for call %s-%s \r\n",ownerName,funcName);
-            dbus_message_unref(msg);
-            return IARM_RESULT_INVALID_STATE;
         }
 
-        // free message
-        dbus_message_unref(msg);
-
-     
-        if(!dbus_message_iter_init(replyMsg, &arglist))
-        {
-            log("%s Error dbus_message_iter_init failed\n", __FUNCTION__); 
-            // free reply message
-            dbus_message_unref(replyMsg);
-            return IARM_RESULT_INVALID_PARAM;
+		//log("[%s\r\n", __FUNCTION__);
+        retCode = IARM_NotifyEvent(ownerName, (IARM_EventId_t)eventId, (void *)eventData);
+        if (retCode != IARM_RESULT_SUCCESS) {
+            log("%s failed to send notification\n", __FUNCTION__);
         }
-
-                   
-        if (dbus_message_iter_get_arg_type(&arglist) != DBUS_TYPE_INT32)
-        {   
-           // log("%s Error Return type is not INT32\n", __FUNCTION__); 
-            // free reply message
-            dbus_message_unref(replyMsg);
-            return IARM_RESULT_INVALID_PARAM;
-        }
-
-        dbus_message_iter_get_basic(&arglist, ret);
-
-        dbus_message_iter_next(&arglist);
-        
-        if (dbus_message_iter_get_arg_type(&arglist) != DBUS_TYPE_ARRAY ||
-            dbus_message_iter_get_element_type(&arglist) != DBUS_TYPE_BYTE)
-        {   
-            log("%s Error Reply argument is malformed\n", __FUNCTION__); 
-        }
-
-        size -= _IARM_MEM_EXTRA_ALLOC_SIZE; /* doesn't include prefix this time */
-
-        dbus_message_iter_recurse(&arglist, &arraylist);
-        dbus_message_iter_get_fixed_array(&arraylist, (void *)&returnArg, (int *)&size);
-        
-	rc = memcpy_s(arg, size, returnArg, size);
-        if(rc!=EOK)
-        {
-                ERR_CHK(rc);
-        }
-
-	returnArg = (unsigned char *) arg;
-
-         // free reply message
-        dbus_message_unref(replyMsg);
-        //printf("%s call exiting %s %s return %d \n", __FUNCTION__, ownerName, funcName, *ret); 
+        IARM_Free(IARM_MEMTYPE_PROCESSLOCAL, eventData);
     }
+    IBUS_Unlock(lock);
 
     return retCode;
 }
 
 
-/**
- * @brief Explicitly mark the return/finish of a RPC-Call 
- * 
- * This API must be called by the implementation of the RPC-Call to submit the return value to the caller.
- * Otherwise the caller will be blocked forever waiting for the return value.
- *
- * This API does not need to be called at the end of the RPC invokation. It can be called anytime by anybody 
- * after the RPC call is requested, to unblocked the caller.
- *
- * @param [in] grpCtx Context of the process group.
- * @param [in] ownerName The name of owner process implementing the RPC call.
- * @param [in] callName The name of the function to call. 
- * @param [in] ret return value of the executed RPC-Call.
- * @param [in] callMsg must match the "serial" passed in when the RPC implementation is executed.
- *
- * @return IARM_Result_t Error Code.
- */
-IARM_Result_t IARM_CallReturn(const char *ownerName, const char *funcName, void *arg, int ret, void *callMsg)
+static gint _Is_Context_Handler_Matching(gconstpointer pa, gconstpointer pb)
 {
-    IARM_Result_t retCode = IARM_RESULT_SUCCESS;
-    IARM_Ctx_t *grpCtx = m_grpCtx;
-    IARM_Ctx_t * cctx = (IARM_Ctx_t *)grpCtx;
-    DBusMessage *msg = (DBusMessage *)callMsg, *reply;
-    DBusMessageIter arraylist;
-    DBusMessageIter returnVal;
-    dbus_uint32_t serial = 0;
-    size_t size;
+    const IARM_Bus_EventContext_t *a = (IARM_Bus_EventContext_t *)pa;
+    const IARM_Bus_EventContext_t *b = (IARM_Bus_EventContext_t *)pb;
 
-   //log("%s %s %s return val %d serial is %p\n", __FUNCTION__, ownerName, funcName, ret, (void *)callMsg); 
-
-    if (!IARM_GrpCtx_IsValid(cctx) || ownerName == NULL || funcName == NULL)
-    {
-        retCode = IARM_RESULT_INVALID_PARAM;
-    }
-
-    if (retCode == IARM_RESULT_SUCCESS)
-    {
-
-       // create a reply from the message
-       reply = dbus_message_new_method_return(msg);
-
-       // add the arguments to the reply
-       dbus_message_iter_init_append(reply, &returnVal);
-       
-        if (!dbus_message_iter_append_basic(&returnVal, DBUS_TYPE_INT32, &ret))
-        { 
-            log("%s Error dbus_message_iter_append_basic failed\n", __FUNCTION__); 
-            dbus_message_unref(reply);
-            return IARM_RESULT_INVALID_PARAM;
-        }
-       
-        size = (size_t)IARM_GetSize(arg);        
-
-        if (!dbus_message_iter_open_container(&returnVal, DBUS_TYPE_ARRAY, "y", &arraylist))
-        {
-            log("%s Error dbus_message_iter_open_container failed\n", __FUNCTION__); 
-            dbus_message_unref(reply);
-            return IARM_RESULT_INVALID_PARAM;
-        }
-
-        if (!dbus_message_iter_append_fixed_array (&arraylist, DBUS_TYPE_BYTE, &arg, size))
-        {
-            log("%s Error dbus_message_iter_append_fixed_array failed\n", __FUNCTION__); 
-            dbus_message_unref(reply);
-            return IARM_RESULT_INVALID_PARAM;
-        }
-
-        if (!dbus_message_iter_close_container(&returnVal, &arraylist))
-        {
-            log("%s Error dbus_message_iter_close_container failed\n", __FUNCTION__); 
-            dbus_message_unref(reply);
-            return IARM_RESULT_INVALID_PARAM;
-        }
-
-        // send the reply && flush the connection
-        if (!dbus_connection_send(cctx->conn, reply, &serial))
-        {
-            log("%s Error dbus_connection_send failed\n", __FUNCTION__); 
-            dbus_message_unref(reply);
-            return IARM_RESULT_INVALID_PARAM;
-        }
-
-        // free the reply
-        dbus_message_unref(reply);
-    }
-    return retCode;
-}
-
-/**
- * @brief Register a event that can be listened to by other processes.
- * 
- * All events published within a process group are uniquely identified by an eventId.
- * A process uses this API to publish an event so this event can be listened by
- * other processes.
- * 
- * An event must be published before it can be "notified"
- *
- * @param [in] grpCtx Context of the process group.
- * @param [in] ownerName The name of the member process that owns the event.
- * @param [in] eventId The ID of the event. This ID is unique across all processes. 
- *
- * @return IARM_Result_t Error Code.
- */
-IARM_Result_t IARM_RegisterEvent(const char *ownerName, int maxEventId)
-{
-    IARM_Result_t retCode = IARM_RESULT_SUCCESS;
-    IARM_Ctx_t *grpCtx = m_grpCtx;
-    IARM_Ctx_t * cctx = (IARM_Ctx_t *)grpCtx;
-
-    if (!IARM_GrpCtx_IsValid(cctx) || !IARM_EventID_IsValid(0))
-    {
-        retCode = IARM_RESULT_INVALID_PARAM;
-    }
-
-    if (retCode == IARM_RESULT_SUCCESS)
-    {
-
-            char compId[IARM_MAX_NAME_LEN] = {0};
-            snprintf(compId, sizeof(compId), "%s_%s", IARM_EVENT_PREFIX, ownerName);
-
-            
-                        /* Register the component */
-                        Component_Node_t *compNode = NULL;
-                        IARM_Malloc(IARM_MEMTYPE_PROCESSLOCAL, sizeof(Component_Node_t), (void **)&compNode);
-				        /*compNode->comp = comp;*/
-						memset(compNode->name, 0, IARM_MAX_NAME_LEN);
-                        strncpy(compNode->name, compId, IARM_MAX_NAME_LEN - 1);
-         				cctx->compList = g_list_append(cctx->compList, &compNode->link);				
-						DumpRegisteredComponents(cctx);
-                        /* The list and its memory will be freed when the cleanup logic is executed like IARM_Term(). */
-                        /* coverity[RESOURCE_LEAK : FALSE] */
-                    }
-
-    return retCode;
-}
-
-
-/**
- * @brief Notify listeners of event
- * 
- * This API is used to notify all listeners of a certain event.
- *
- * @param [in] grpCtx Context of the process group.
- * @param [in] eventId The ID of the event.
- * @param [in] arg Argument to be passed to the listeners. IARM Module will free this memor once all listeners are
- *             notified.
- *
- * @return IARM_Result_t Error Code.
- */
-IARM_Result_t IARM_NotifyEvent(const char *ownerName,  IARM_EventId_t eventId, void *arg)
-{
-    IARM_Result_t retCode = IARM_RESULT_SUCCESS;
-    IARM_Ctx_t *grpCtx = m_grpCtx;
-    IARM_Ctx_t * cctx = (IARM_Ctx_t *)grpCtx;
-
-    // log("%s called for eventId %d\n", __FUNCTION__, eventId); 
-     
-    if (!IARM_GrpCtx_IsValid(cctx) || !IARM_EventID_IsValid(eventId))
-    {
-        retCode = IARM_RESULT_INVALID_PARAM;
-    }
-
-    IARM_ASSERT((arg == NULL) || (IARM_GetMemType(arg) == IARM_MEMTYPE_PROCESSLOCAL));
-
-    if (retCode == IARM_RESULT_SUCCESS)
-    {
-        DBusMessage* msg;
-        DBusMessageIter arglist, arraylist;
-        dbus_uint32_t serial = 0;
-        uint32_t size;
-
-        // create a signal & check for errors 
-        msg = dbus_message_new_signal(  "/iarm/signal/Object", // object name of the signal
-                                            "iarm.signal.Type", // interface name of the signal
-                                            cctx->memberName);
-            
-        if (NULL == msg) 
-        { 
-            log("%s Error dbus_message_new_signal failed\n", __FUNCTION__); 
-            return IARM_RESULT_INVALID_PARAM;
-        }
-
-        /* append arguments onto signal */
-        dbus_message_iter_init_append(msg, &arglist);
-
-        if (!dbus_message_iter_append_basic(&arglist, DBUS_TYPE_UINT32 , &eventId))
-        {
-            log("%s Error dbus_message_iter_append_basic failed\n",__FUNCTION__); 
-            dbus_message_unref(msg);
-            return IARM_RESULT_INVALID_PARAM;
-        }
-
-        if (!dbus_message_iter_append_basic(&arglist, DBUS_TYPE_STRING, &ownerName))
-        {
-            log("%s Error dbus_message_iter_append_basic (STRING) failed\n",__FUNCTION__); 
-            dbus_message_unref(msg);
-            return IARM_RESULT_INVALID_PARAM;
-        }
-        size = (uint32_t)IARM_GetSize(arg);
-
-        if (!dbus_message_iter_append_basic(&arglist, DBUS_TYPE_UINT32 , &size))
-        {
-            log("%s Error dbus_message_iter_append_basic failed\n", __FUNCTION__); 
-            dbus_message_unref(msg);
-            return IARM_RESULT_INVALID_PARAM;
-        }
-
-        if (!dbus_message_iter_open_container(&arglist, DBUS_TYPE_ARRAY, "y", &arraylist))
-        {
-            log("%s Error dbus_message_iter_open_container failed\n", __FUNCTION__); 
-            dbus_message_unref(msg);
-            return IARM_RESULT_INVALID_PARAM;
-        }
-
-        if (!dbus_message_iter_append_fixed_array (&arraylist, DBUS_TYPE_BYTE, &arg, size))
-        {
-            log("%s Error dbus_message_iter_append_fixed_array failed\n", __FUNCTION__); 
-            dbus_message_unref(msg);
-            return IARM_RESULT_INVALID_PARAM;
-        }
-
-        if (!dbus_message_iter_close_container(&arglist, &arraylist))
-        {
-            log("%s Error dbus_message_iter_close_container failed\n", __FUNCTION__); 
-            dbus_message_unref(msg);
-            return IARM_RESULT_INVALID_PARAM;
-        }
-        
-        /* send the message and flush the connection */
-        if (!dbus_connection_send(cctx->connEvent, msg, &serial))
-        {
-            log("%s Error dbus_connection_send failed\n", __FUNCTION__); 
-            dbus_message_unref(msg);
-            return IARM_RESULT_INVALID_PARAM;
-        }
-        dbus_connection_flush(cctx->connEvent);
-            
-        dbus_message_unref(msg);
-    }
-
-    return retCode;
-}
-
-/**
- * @brief Register to listen for an event. 
- * 
- * This API is used to register the calling process for a certain event.
- * If the event is not yet published, this call be be blocked until the event
- * is published.
- *
- * @param [in] grpCtx Context of the process group.
- * @param [in] eventId The ID of the event.
- * @param [in] listener Callback function when the event is received. 
- * @param [in] callCtx Local context used when calling the listener's callback function.
- *
- * @return IARM_Result_t Error Code.
- */
-IARM_Result_t IARM_RegisterListner(const char *ownerName, IARM_EventId_t eventId, IARM_Listener_t listener, void *callCtx)
-{
-    IARM_Result_t retCode = IARM_RESULT_SUCCESS;
-    IARM_Ctx_t *grpCtx = m_grpCtx;
-    IARM_Ctx_t * cctx = (IARM_Ctx_t *)grpCtx;
-    IARM_UIEvent_t *eventInfo;
-
-    if (IARM_GrpCtx_IsValid(cctx) && IARM_EventID_IsValid(eventId))
-    {
-        char compId[IARM_MAX_NAME_LEN] = {0};
-        snprintf(compId, sizeof(compId), "%s_%d", "IARM_Event", eventId);
-
-       //log("%s for event %d\n", __FUNCTION__, eventId);
-
-       
-        if((eventInfo = (IARM_UIEvent_t *) malloc(sizeof(IARM_UIEvent_t))) == NULL)
-        {
-            log("%s Error malloc failed\n", __FUNCTION__);
-            return  IARM_RESULT_INVALID_PARAM;
-        }
-        
-        eventInfo->cctx = cctx;
-        eventInfo->callCtx = callCtx;
-        eventInfo->eventId = eventId;
-        eventInfo->listener = listener;
-        strncpy(eventInfo->ownerName, ownerName, IARM_MAX_NAME_LEN-1);
-	eventInfo->ownerName[IARM_MAX_NAME_LEN-1] = '\0';  //CID:136714 - Buffer size
-
-        if(!dbus_connection_add_filter(cctx->conn, &dbusCallHandler, (void *)eventInfo, &free))
-        {
-            free(eventInfo);
-            log("%s Error add filter failed\n", __FUNCTION__);
-            return IARM_RESULT_INVALID_PARAM;
-        }
-        cctx->eventRegistry = g_list_prepend(cctx->eventRegistry,eventInfo);
-
-                /* Register the component */
-                Component_Node_t *compNode = NULL;
-                IARM_Malloc(IARM_MEMTYPE_PROCESSLOCAL, sizeof(Component_Node_t), (void **)&compNode);
-		        /*compNode->comp = comp;*/
-                memset(compNode->name, 0, IARM_MAX_NAME_LEN);
-                strncpy(compNode->name, compId, IARM_MAX_NAME_LEN-1);
-            	cctx->compList = g_list_append(cctx->compList, &compNode->link);				
-				DumpRegisteredComponents(cctx);
-                /* The list and its memory will be freed when the cleanup logic is executed like IARM_Term(). */
-                /* coverity[RESOURCE_LEAK : FALSE] */
-            }
-
-    return retCode;
+    return (a->eventId != b->eventId) || (a->handler != b->handler) || strncmp(a->ownerName, b->ownerName,IARM_MAX_NAME_LEN);
 }
 
 static gint _Is_Context_Matching(gconstpointer pa, gconstpointer pb)
 {
-    const IARM_UIEvent_t *a = (IARM_UIEvent_t *)pa;
-    const IARM_UIEvent_t *b = (IARM_UIEvent_t *)pb;
+    const IARM_Bus_EventContext_t *a = (IARM_Bus_EventContext_t *)pa;
+    const IARM_Bus_EventContext_t *b = (IARM_Bus_EventContext_t *)pb;
 
     return (a->eventId != b->eventId) || strncmp(a->ownerName, b->ownerName,IARM_MAX_NAME_LEN);
 }
 
 /**
- * @brief UnRegister to listen for an event. 
- * 
- * This API is used to unregister the calling process for a certain event.
+ * @brief Register to listen for event.
  *
- * @param [in] grpCtx Context of the process group.
- * @param [in] eventId The ID of the event.
+ * This API register to listen to event and provide the callback function for event notification.
+ * Execution of the handler will not block the process sending the event.
+ *
+ * @param [in] eventId The event to listen to.
+ * @param [in] handler THe callback function for event notification.
  *
  * @return IARM_Result_t Error Code.
  */
-IARM_Result_t IARM_UnRegisterListner(const char *ownerName, IARM_EventId_t eventId)
+IARM_Result_t IARM_Bus_RegisterEventHandler(const char *ownerName, IARM_EventId_t eventId, IARM_EventHandler_t handler)
 {
     IARM_Result_t retCode = IARM_RESULT_SUCCESS;
-    IARM_Ctx_t *grpCtx = m_grpCtx;
-    IARM_Ctx_t * cctx = (IARM_Ctx_t *)grpCtx;
-    GList *registeredMember = NULL;
-    Component_Node_t *compNode = NULL;
 
-    //log("%s eventId is %d\n", __FUNCTION__, eventId);
+	//log("Entering [%s] - [%s][%d][%p]\r\n", __FUNCTION__, ownerName, eventId, handler);
 
-    if (!IARM_GrpCtx_IsValid(cctx) || !IARM_EventID_IsValid(eventId))
-    {
-        log("%s Error Invalid Parameter\n", __FUNCTION__);
-        return IARM_RESULT_INVALID_PARAM;
-    }
-    else
-    {
-        IARM_UIEvent_t eventInfo, *pEventInfo;
-        GList *pData; 
-        char compId[IARM_MAX_NAME_LEN] = {0};
-        snprintf(compId, sizeof(compId), "%s_%d", "IARM_Event", eventId);
+	IARM_ASSERT(m_initialized && m_connected);
 
-        eventInfo.eventId = eventId;
-        strncpy(eventInfo.ownerName, ownerName, IARM_MAX_NAME_LEN -1);
-	eventInfo.ownerName[IARM_MAX_NAME_LEN -1] = '\0';  //CID:136922 - Buffer size
-
-        if((pData = g_list_find_custom(cctx->eventRegistry, &eventInfo, _Is_Context_Matching)) == NULL)
-        {
-            log("%s ERROR Listener does not exist\n", __FUNCTION__);
-            return IARM_RESULT_INVALID_PARAM;
-        }
-
-        pEventInfo = (IARM_UIEvent_t *)pData->data;  
-
-        dbus_connection_remove_filter(cctx->conn, &dbusCallHandler,pEventInfo);
-
-        cctx->eventRegistry = g_list_remove(cctx->eventRegistry,pEventInfo);
-		
-		/* Find the component */
-		for(registeredMember = (cctx->compList); registeredMember != NULL;registeredMember = registeredMember->next)
-        { 
-			compNode = container_of((GList *)registeredMember->data, Component_Node_t, link);
-      		if (strcmp(compNode->name, compId) == 0)
-       		{
-               		cctx->compList = g_list_remove(cctx->compList, &compNode->link);
-              		IARM_Free(IARM_MEMTYPE_PROCESSLOCAL, compNode);
-              		break;
-			}
-		}
+	if (0 && strcmp(ownerName, m_member->selfName) == 0) {
+		log("Cannot Listen for own event!\r\n");
+		retCode = IARM_RESULT_INVALID_PARAM;
+        return retCode;
 	}
+
+    if (NULL == handler) {
+        log("Cannot Register for NULL Handler!\r\n");
+        retCode = IARM_RESULT_INVALID_PARAM;
+         return retCode;
+    }
+
+    IBUS_Lock(lock);
+    if (retCode == IARM_RESULT_SUCCESS && m_initialized && m_connected) {
+        {
+            IARM_Bus_EventContext_t *cctx = NULL;
+    		retCode = IARM_Malloc(IARM_MEMTYPE_PROCESSLOCAL, sizeof(*cctx), (void **) &cctx);
+    		strncpy(cctx->ownerName, ownerName, IARM_MAX_NAME_LEN);
+    		cctx->eventId = eventId;
+    		cctx->handler = handler;
+
+            if(g_list_find_custom(m_eventHandlerList,cctx,_Is_Context_Handler_Matching))
+            {
+        	    log("Error: Owner [%s] tries to resgister duplicate handler for events ID [%d]\r\n", ownerName, eventId);
+                IARM_Free(IARM_MEMTYPE_PROCESSLOCAL, (void *)cctx);
+                retCode = IARM_RESULT_INVALID_PARAM;
+            }
+            else
+            {
+    	        //log("Adding Event Handler for [%s][%d] \r\n", ownerName, eventId);   
+                if( NULL ==  g_list_find_custom(m_eventHandlerList,cctx,_Is_Context_Matching) )
+                {
+                    m_eventHandlerList = g_list_prepend(m_eventHandlerList, cctx);
+                    retCode = IARM_RegisterListner(ownerName, (IARM_EventId_t) eventId, _EventHandler_FuncWrapper, NULL);
+                    if (retCode != IARM_RESULT_SUCCESS) {
+                        log("%s failed add listener for [%s][%d] with IARM Core Handler \r\n", __FUNCTION__, ownerName, eventId);
+                    }
+                    //log("Added event  [%s][%d] with IARM Core Handler \r\n", ownerName, eventId);
+                }
+                else
+                {
+                    m_eventHandlerList = g_list_prepend(m_eventHandlerList, cctx);
+                }
+            }
+        }
+    }
+    else {
+        retCode = IARM_RESULT_INVALID_STATE;
+		log("%s failed for eventID:%d of %s as this process is in invalid state isInitialized:%d isConnected:%d \n", __FUNCTION__, eventId, ownerName, m_initialized, m_connected);
+    }
+    IBUS_Unlock(lock);
+
     return retCode;
 }
 
-void *dispatchThread(void *arg)
+/**
+ * @brief Register to remove listen for event.
+ *
+ * This API remove the process from the listeners of the event.
+ *
+ * @param [in] eventId The event whose listener to remove.
+ *
+ * @return IARM_Result_t Error Code.
+ */
+IARM_Result_t IARM_Bus_UnRegisterEventHandler(const char *ownerName, IARM_EventId_t eventId)
 {
-    IARM_Ctx_t *cctx = (IARM_Ctx_t *)arg;
+    IARM_Result_t retCode = IARM_RESULT_SUCCESS;
 
-    log("%s %s launched\n", __FUNCTION__, cctx->memberName);
+    IARM_ASSERT(m_initialized && m_connected);
 
-    // Set thread name: memberName + "_iarmD", max 15 chars for prctl
-    char threadName[16] = {0};
-    // Truncate memberName so total length < 16
-    int maxMemberLen = 15 - (int)IARM_THREAD_NAME_SUFFIX_LEN;
-    if (maxMemberLen < 0) maxMemberLen = 0;
-    snprintf(threadName, sizeof(threadName), "%.*s%s", maxMemberLen, cctx->memberName, IARM_THREAD_NAME_SUFFIX);
-    prctl(PR_SET_NAME, threadName, 0, 0, 0);
+    IBUS_Lock(lock);
 
-    /* just loop, dispatching messages until the connection is closed */
-    try {
-      while (1) {
-        pthread_mutex_lock(&(cctx->mutexConn));
-        if (cctx->exitStatus & DISPATCH_TERMINATE) {
-            pthread_mutex_unlock(&(cctx->mutexConn));
-            break;
-        }
-        pthread_mutex_unlock(&(cctx->mutexConn));
-        
-        if (!cctx->conn || !dbus_connection_read_write_dispatch(cctx->conn, 500)) {
-            break;
-        }
+	if (m_initialized && m_connected) {
+        IARM_Bus_EventContext_t *cctx = NULL;
+        retCode = IARM_RESULT_INVALID_PARAM;
+		GList *event_list = g_list_first(m_eventHandlerList);
+		while(event_list != NULL) {
+			cctx = (IARM_Bus_EventContext_t *)event_list->data;
+            event_list = g_list_next(event_list);
+			if (strncmp(cctx->ownerName, ownerName,IARM_MAX_NAME_LEN) == 0 && cctx->eventId == eventId) {
+				//log("Event Handler [%s][%d] is removed\r\n", ownerName, eventId);
+                m_eventHandlerList = g_list_remove(m_eventHandlerList, (void *)cctx);
+			    IARM_Free(IARM_MEMTYPE_PROCESSLOCAL, (void *)cctx);
+			}
+		}
+        retCode = IARM_UnRegisterListner(ownerName, (IARM_EventId_t)eventId);
+        if (retCode != IARM_RESULT_SUCCESS)
+             log("%s failed remove listener for [%s][%d] with IARM Core Handler \r\n", __FUNCTION__, ownerName, eventId);
+        else
+             log("%s Listener removed for [%s][%d] with IARM Core Handler \r\n", __FUNCTION__, ownerName, eventId); 
     }
+    else {
+        retCode = IARM_RESULT_INVALID_STATE;
+		log("%s failed for eventID:%d of %s as this process is in invalid state isInitialized:%d isConnected:%d \n", __FUNCTION__, eventId, ownerName, m_initialized, m_connected);
     }
-    catch (const std::exception& e) {
-        printf("IARM: Exception caught in dispatchThread during dbus_connection_read_write_dispatch: %s\n", e.what());
-    }
-    catch (...) {
-        printf("IARM: Unknown exception caught during message processing - continuing shutdown\n");
-    }
-    
-    log("%s %s connection closed\n", __FUNCTION__, cctx->memberName);
-    pthread_mutex_lock(&(cctx->mutexConn));
-    cctx->exitStatus = cctx->exitStatus|DISPATCH_EXIT;
-    pthread_cond_signal(&(cctx->condConn));
-    pthread_mutex_unlock(&(cctx->mutexConn));
-    return NULL;
-}
 
-void *dispatchThreadMethodCall(void *arg)
-{
-    IARM_Ctx_t *cctx = (IARM_Ctx_t *)arg;
-
-  //  log("%s %s launched\n", __FUNCTION__, cctx->memberName);
-    /* just loop, dispatching messages until the connection is closed */
-    while (dbus_connection_read_write_dispatch (cctx->connMethodCall, 50)){}
-
-    //log("%s %s connection closed\n", __FUNCTION__, cctx->memberName);
-    pthread_mutex_lock(&(cctx->mutexConn));
-    cctx->exitStatus = cctx->exitStatus|METHOD_CALL_EXIT;
-    pthread_cond_signal(&(cctx->condConn));
-    pthread_mutex_unlock(&(cctx->mutexConn));
-    return NULL;
+    IBUS_Unlock(lock);
+    return retCode;
 }
 
 
 /**
- * @brief Initialize the IARM module for the calling process.
- * 
- * This API is used to initialize the IARM module for the calling process, and regisers the calling process to
- * be visible to other processes that it wishes to communicate to. The registered process is uniquely identified
- * by (groupName, memberName).
+ * @brief Remove specific handler  registered for the given event.
  *
- * @param [in] grpCtx Context of the process group.
- * @param [in] groupName The IPC group this process wishes to participate.
- * @param [in] memberName The name of the calling process.
- * @param [out] grpCtx (Group) Context used when communicating with other members of the same group. 
+ * This API remove the specific handlers.   
+ * @param[in] ownerName The well-known name of the application.
+ * @param [in] eventId The event whose listener to remove.
+ * @param [in] handler The event handler to remove.
  *
  * @return IARM_Result_t Error Code.
  */
-IARM_Result_t IARM_Init(const char *groupName, const char *memberName)
+IARM_Result_t IARM_Bus_RemoveEventHandler(const char *ownerName, IARM_EventId_t eventId, IARM_EventHandler_t handler)
+{
+    IARM_Result_t retCode = IARM_RESULT_IPCCORE_FAIL;
+
+    IARM_ASSERT(m_initialized && m_connected);
+
+    if (NULL == handler) {
+        log("Cannot Remove Handle  for NULL Handler!\r\n");
+        retCode = IARM_RESULT_INVALID_PARAM;
+         return retCode;
+    }
+
+    IBUS_Lock(lock);
+
+    if (m_initialized && m_connected) {
+        
+        IARM_Bus_EventContext_t *cctx = NULL;
+        GList *event_list = g_list_first(m_eventHandlerList);
+        retCode = IARM_RESULT_INVALID_PARAM;
+        while(event_list != NULL) {
+            cctx = (IARM_Bus_EventContext_t *)event_list->data;
+            if (strncmp(cctx->ownerName, ownerName,IARM_MAX_NAME_LEN) == 0 && (cctx->eventId == eventId)
+                && (cctx->handler == handler)) 
+            {
+               log("Event Handler with Handler [%p] for [%s] event [%d] is removed\r\n",handler,ownerName, eventId);
+                
+                /* Remove from the Master Event List */
+                m_eventHandlerList = g_list_remove(m_eventHandlerList, (void *)cctx);
+                retCode = IARM_RESULT_SUCCESS;
+
+                /* Now search that if we have still same event registered with diff handler */
+                if( NULL == g_list_find_custom(m_eventHandlerList,cctx,_Is_Context_Matching) )
+                {
+                    retCode = IARM_UnRegisterListner(ownerName, (IARM_EventId_t)eventId);
+                    if (retCode != IARM_RESULT_SUCCESS)
+                        log("%s Failed Remove event  [%s][%d] with IARM Core \r\n", __FUNCTION__, ownerName, eventId);
+                    else
+                        log("%s Removed event  [%s][%d] with IARM Core \r\n", __FUNCTION__, ownerName, eventId);
+                }
+                IARM_Free(IARM_MEMTYPE_PROCESSLOCAL, (void *)cctx);
+                break;
+            }
+            else
+            {
+                event_list = g_list_next(event_list);
+            }   
+        }
+
+    }
+    else {
+        retCode = IARM_RESULT_INVALID_STATE;
+		log("%s failed for eventID:%d of %s as this process is in invalid state isInitialized:%d isConnected:%d \n", __FUNCTION__, eventId, ownerName, m_initialized, m_connected);
+    }
+
+    IBUS_Unlock(lock);
+    return retCode;
+}
+
+/**
+ * @brief Check if current process is registered with UI Manager.
+ *
+ * In the event of a crash at UI Manager, the manager may have lost memory of registered process.
+ * A member process can call this function regularly to see if it is still registered.
+ *
+ * @param [out] isRegistered True if still registered.
+ *
+ * @return IARM_Result_t Error Code.
+ */
+IARM_Result_t IARM_Bus_IsConnected(const char *memberName, int *isRegistered)
+{
+    IARM_Result_t retCode = IARM_RESULT_SUCCESS;
+
+    IBUS_Lock(lock);
+    if (m_initialized && m_connected) {
+
+        IARM_Bus_Daemon_CheckRegistration_Param_t req;
+
+        strncpy(req.memberName,memberName,IARM_MAX_NAME_LEN - 1);
+
+        req.isRegistered = 0;
+
+        IARM_Bus_Call(IARM_BUS_DAEMON_NAME, IARM_BUS_DAEMON_API_CheckRegistration, (void *)&req, sizeof(IARM_Bus_Daemon_CheckRegistration_Param_t));
+
+        if(req.isRegistered == 0) //on failure case, we need to return failure.
+        {
+		    log("%s failed to communicate with daemon\n", __FUNCTION__);
+            retCode = IARM_RESULT_IPCCORE_FAIL;
+        }
+    }
+    else {
+		log("%s invalid state\n", __FUNCTION__);
+        retCode = IARM_RESULT_INVALID_STATE;
+    }
+
+    IBUS_Unlock(lock);
+
+    if(retCode == IARM_RESULT_SUCCESS)
+    {
+        *isRegistered = 1;
+    }
+    else
+    {
+        *isRegistered = 0;
+    }
+
+    return retCode;
+}
+
+
+/**
+ * @brief Check if current process is registered with UI Manager.
+ *
+ * In the event of a crash at UI Manager, the manager may have lost memory of registered process.
+ * A member process can call this function regularly to see if it is still registered.
+ *
+ * @param [out] isRegistered True if still registered.
+ *
+ * @return IARM_Result_t Error Code.
+ */
+IARM_Result_t IARM_Bus_RegisterCall(const char *methodName, IARM_BusCall_t handler)
+{
+    IARM_Result_t retCode = IARM_RESULT_SUCCESS;
+	static int count = -1;
+
+	IARM_ASSERT(m_initialized && m_connected);
+
+    if ( methodName == NULL || (strlen(methodName) >= IARM_MAX_NAME_LEN)) {
+    	retCode = IARM_RESULT_INVALID_PARAM;
+		log("%s invalid input passed\n", __FUNCTION__);
+        return retCode;
+    }
+
+    IBUS_Lock(lock);
+	count++;
+
+
+    if (retCode == IARM_RESULT_SUCCESS && m_initialized && m_connected) {
+    	//log("Entering [%s] - [%s][%p]\r\n", __FUNCTION__, methodName, handler);
+
+        IARM_Bus_CallContext_t *cctx = NULL;
+		retCode = IARM_Malloc(IARM_MEMTYPE_PROCESSLOCAL, sizeof(*cctx), (void **) &cctx);
+		strncpy(cctx->ownerName, m_member->selfName, IARM_MAX_NAME_LEN -1);
+		cctx->ownerName[IARM_MAX_NAME_LEN -1] = '\0';
+		strncpy(cctx->methodName, methodName, IARM_MAX_NAME_LEN -1);
+		cctx->methodName[IARM_MAX_NAME_LEN -1] = '\0';
+		cctx->handler = handler;
+        retCode = IARM_RegisterCall(m_member->selfName, methodName, _BusCall_FuncWrapper, (void *)cctx/*callCtx*/);
+        {
+           //log("Adding registered call context [%p] to list [%p]\r\n", cctx, m_registeredCallList);
+            m_registeredCallList = g_list_prepend(m_registeredCallList, cctx);
+        }
+        if (IARM_RESULT_SUCCESS != retCode)
+           log("%s failed register call [%s]\n", __FUNCTION__, methodName);
+        
+        RegisterPreChange(cctx);           
+    }
+    else {
+        retCode = IARM_RESULT_INVALID_STATE;
+		log("%s invalid state\n", __FUNCTION__);
+    }
+    IBUS_Unlock(lock);
+    return retCode;
+}
+
+
+IARM_Result_t IARM_Bus_Call_with_IPCTimeout(const char *ownerName,  const char *methodName, void *arg, size_t argLen, int timeout)
 {
     errno_t rc = -1;
-    IARM_Result_t retCode = IARM_RESULT_IPCCORE_FAIL;
-     IARM_Ctx_t *cctx = NULL;
-    DBusError err;
-    int ret;
-    char busName[IARM_BUS_NAME_MAX_LEN] = {0};
-     
-     //log("%s called \n", __FUNCTION__); 
-     
+    IARM_Result_t retCode = IARM_RESULT_SUCCESS;
 
-    if (!dbus_threads_init_default())
-    {
-        log("%s Error dbus_threads_init_default failed", __FUNCTION__);
-    }
-     
-    if ( groupName == NULL || (strlen(groupName) >= IARM_MAX_NAME_LEN))
-    {
-    	 retCode = IARM_RESULT_INVALID_PARAM;
-     }
-    else if ( memberName == NULL || (strlen(memberName) >= IARM_MAX_NAME_LEN))
-    {
-    	 retCode = IARM_RESULT_INVALID_PARAM;
-     }
-     else
-    {
-		 retCode = IARM_Malloc(IARM_MEMTYPE_PROCESSLOCAL, sizeof(*cctx), (void **)&cctx);
-     }
+	IARM_ASSERT(m_initialized && m_connected);
 
-    log("%s group name = %s member name = %s\n", __FUNCTION__, groupName, memberName);
+    IBUS_Lock(lock);
 
-    if (retCode == IARM_RESULT_SUCCESS)
-    {            
-        memset(cctx, 0, sizeof(IARM_Ctx_t));
-	
-        cctx->isActive = _IARM_CTX_HEADER_MAGIC;
-           
-        pthread_mutex_init(&(cctx->mutexConn),NULL);
-        pthread_cond_init(&(cctx->condConn),NULL);
-
-        dbus_error_init(&err);
-
-        /* connect to the bus and check for errors */
-        cctx->conn = dbus_bus_get_private(DBUS_BUS_SYSTEM, &err);
-
-        if ((dbus_error_is_set(&err)) || (NULL == cctx->conn))
-        { 
-            log("an error occurred: %s\n", err.message);
-            log("%s Error Cannot connect to the Dbus (first instance)\n", __FUNCTION__);
-            dbus_error_free(&err); 
-            retCode = IARM_RESULT_IPCCORE_FAIL;
-            goto error;
-        }
-
-        dbus_connection_set_exit_on_disconnect(cctx->conn,FALSE);
-
-
-        dbus_error_init(&err);
-
-        /* connect to the bus and check for errors */
-        cctx->connEvent = dbus_bus_get_private(DBUS_BUS_SYSTEM, &err);
-
-        if ((dbus_error_is_set(&err)) || (NULL == cctx->connEvent))
-        { 
-            log("an error occurred: %s\n", err.message);
-            log("%s Error Cannot connect to the Dbus (first instance)\n", __FUNCTION__);
-            dbus_error_free(&err); 
-            retCode = IARM_RESULT_IPCCORE_FAIL;
-            goto error;
-        }
-
-        dbus_connection_set_exit_on_disconnect(cctx->connEvent,FALSE);
-
-
-        dbus_error_free(&err);
-
-        /* to avoid deadlock in nested RPC calls use seperate connection */
-        cctx->connMethodCall = dbus_bus_get_private(DBUS_BUS_SYSTEM, &err);
+    if (m_initialized && m_connected) {
+        void *argOut = NULL;
         
-        if ((dbus_error_is_set(&err)) || (NULL == cctx->connMethodCall))
-        { 
-            log("an error occurred: %s\n", err.message);
-            log("%s Error Cannot connect to the Dbus (second instance)\n", __FUNCTION__);
-            dbus_error_free(&err); 
-            retCode = IARM_RESULT_IPCCORE_FAIL;
-            goto error;
+        //log("Final call to %s-%s\r\n", ownerName, methodName);
+
+        /* even if there is no arg we still need to send _IARM_MEM_EXTRA_ALLOC_SIZE byte header allocated by IARM_Malloc, in this case use 1 byte dummy arg */
+        retCode = IARM_Malloc(IARM_MEMTYPE_PROCESSLOCAL, (arg != NULL) ? argLen : 1, (void **)&argOut);
+        
+        if (retCode == IARM_RESULT_SUCCESS) {
+            if(arg != NULL)
+            {
+                
+		rc = memcpy_s(argOut,argLen, arg, argLen);
+		if(rc!=EOK)
+		{
+			ERR_CHK(rc);
+		}
+
+            }
+            IARM_Result_t retVal = IARM_RESULT_SUCCESS;
+            retCode = IARM_CallWithTimeout(ownerName, methodName, argOut, timeout, (int *)&retVal);
+            if ((retCode == IARM_RESULT_SUCCESS) && (argOut != NULL))
+            {
+                
+	    	rc = memcpy_s(arg,argLen,argOut,argLen);
+		if(rc!=EOK)
+                {
+                        ERR_CHK(rc);
+                }
+
+            }
+            IARM_Free(IARM_MEMTYPE_PROCESSLOCAL, argOut);
+            if(retCode == IARM_RESULT_SUCCESS)
+            {
+                retCode = retVal;
+            }
+            if(retCode != IARM_RESULT_SUCCESS)
+		        log("%s failed to complete the method invocation %s with retCode %d \n", __FUNCTION__, methodName, retCode);
         }
+        else
+		    log("%s failed to allocated memory for the method invocation %s with retCode %d \n", __FUNCTION__, methodName, retCode);
+    }
+    else {
+        retCode = IARM_RESULT_INVALID_STATE;
+		log("%s invalid state\n", __FUNCTION__);
+    }
+    IBUS_Unlock(lock);
 
-        dbus_connection_set_exit_on_disconnect(cctx->connMethodCall,FALSE);
+    return retCode;
+}
 
-        //strcpy(busName, "process.iarm.");
-        //strcpy(&busName[13], memberName);
-        snprintf(busName, IARM_BUS_NAME_MAX_LEN - 1, "%s%s", "process.iarm.", memberName);
-        dbus_error_free(&err);
-        ret = dbus_bus_request_name(cctx->conn, busName, DBUS_NAME_FLAG_REPLACE_EXISTING | DBUS_NAME_FLAG_ALLOW_REPLACEMENT, &err);
 
-        if ((dbus_error_is_set(&err)) || (DBUS_REQUEST_NAME_REPLY_PRIMARY_OWNER != ret))
-        {
-            log("%s Error Request to set the Dbus name failed\n", __FUNCTION__);
-            dbus_error_free(&err); 
-            retCode = IARM_RESULT_IPCCORE_FAIL;
-            goto error;
+IARM_Result_t IARM_Bus_Call(const char *ownerName,  const char *methodName, void *arg, size_t argLen)
+{
+    errno_t rc = -1;
+    IARM_Result_t retCode = IARM_RESULT_SUCCESS;
+
+	IARM_ASSERT(m_initialized && m_connected);
+
+    IBUS_Lock(lock);
+
+    if (m_initialized && m_connected) {
+        void *argOut = NULL;
+        
+        //log("Final call to %s-%s\r\n", ownerName, methodName);
+
+        /* even if there is no arg we still need to send _IARM_MEM_EXTRA_ALLOC_SIZE byte header allocated by IARM_Malloc, in this case use 1 byte dummy arg */
+        retCode = IARM_Malloc(IARM_MEMTYPE_PROCESSLOCAL, (arg != NULL) ? argLen : 1, (void **)&argOut);
+        
+        if (retCode == IARM_RESULT_SUCCESS) {
+            if(arg != NULL)
+            {
+                
+		rc = memcpy_s(argOut,argLen, arg, argLen);
+		if(rc!=EOK)
+		{
+			ERR_CHK(rc);
+		}
+
+            }
+            IARM_Result_t retVal = IARM_RESULT_SUCCESS;
+            retCode = IARM_Call(ownerName, methodName, argOut, (int *)&retVal);
+            if ((retCode == IARM_RESULT_SUCCESS) && (argOut != NULL))
+            {
+                
+		rc = memcpy_s(arg,argLen,argOut,argLen);
+		if(rc!=EOK)
+                {
+                        ERR_CHK(rc);
+                }
+
+            }
+            IARM_Free(IARM_MEMTYPE_PROCESSLOCAL, argOut);
+            if(retCode == IARM_RESULT_SUCCESS)
+            {
+                retCode = retVal;
+            }
+            else
+                log("%s failed to invoke %s with retCode %d \n", __FUNCTION__, methodName, retCode);
+
+            if(retCode != IARM_RESULT_SUCCESS)
+                log("%s provider returned error (%d) for the method %s \n", __FUNCTION__, retCode, methodName);
         }
-        /* marking as intended */
-        /* coverity[NO_EFFECT : FALSE] */
-        rc = strcpy_s(cctx->busName,sizeof(cctx->busName), busName);
+        else
+            log("%s failed to allocated memory for the method invocation %s with retCode %d \n", __FUNCTION__, methodName, retCode);
+    }
+    else {
+        retCode = IARM_RESULT_INVALID_STATE;
+		log("%s failed to call %s as this process is in invalid state isInitialized:%d isConnected:%d \n", __FUNCTION__, methodName, m_initialized, m_connected);
+    }
+    IBUS_Unlock(lock);
+
+    return retCode;
+}
+
+IARM_Result_t IARM_Bus_CallWithTracing(const char *ownerName, const char *methodName, void *arg, size_t argLen)
+{
+    const char *tp = iarm_otel_get_current_traceparent();
+    if (!tp || !iarm_tp_valid(tp)) {
+        return IARM_Bus_Call(ownerName, methodName, arg, argLen);
+    }
+
+    size_t env_size = sizeof(IARM_RPC_Envelope_t) + argLen;
+    IARM_RPC_Envelope_t *env = (IARM_RPC_Envelope_t *)malloc(env_size);
+    if (!env) {
+        return IARM_RESULT_OOM;
+    }
+
+    env->magic = IARM_OTEL_RPC_MAGIC;
+    strncpy(env->traceparent, tp, IARM_OTEL_TP_LEN);
+    env->traceparent[IARM_OTEL_TP_LEN] = '\0';
+    env->inner_len = argLen;
+    memcpy(env->inner_arg, arg, argLen);
+
+    IARM_Result_t retCode = IARM_Bus_Call(ownerName, methodName, env, env_size);
+    memcpy(arg, env->inner_arg, argLen);
+
+    free(env);
+    return retCode;
+}
+
+
+IARM_Result_t IARM_Bus_RegisterEvent(int maxEventId)
+{
+    IARM_Result_t retCode = IARM_RESULT_SUCCESS;
+	/*log("Entering [%s] - [%d]\r\n", __FUNCTION__, maxEventId);*/
+
+	IARM_ASSERT(m_initialized && m_connected);
+
+    IBUS_Lock(lock);
+    if (m_initialized && m_connected) {
+        retCode = IARM_RegisterEvent(m_member->selfName, maxEventId);
+        if(retCode != IARM_RESULT_SUCCESS)
+            log("%s failed to register event %d with retCode %d \n", __FUNCTION__, maxEventId, retCode);
+    }
+    else {
+        retCode = IARM_RESULT_INVALID_STATE;
+		log("%s invalid state\n", __FUNCTION__);
+    }
+    IBUS_Unlock(lock);
+    return retCode;
+}
+
+/**
+ * @brief Request to grab resource
+ *
+ * Ask UI Manager to grant resoruce. Upon the success return, the resource is
+ * available to use.
+ *
+ * @param [in] resrcType: Resource type.
+ *
+ * @return IARM_Result_t Error Code.
+ */
+
+IARM_Result_t IARM_BusDaemon_RequestOwnership(IARM_Bus_ResrcType_t resrcType)
+{
+    errno_t rc = -1;
+    IARM_Result_t retCode = IARM_RESULT_SUCCESS;
+    //log("Entering IARM_BusDaemon_RequestOwnership\r\n");
+
+	IARM_ASSERT(m_initialized && m_connected);
+
+    IBUS_Lock(lock);
+
+    if( (resrcType < 0) || (resrcType >= IARM_BUS_RESOURCE_MAX))
+    {
+        IBUS_Unlock(lock);
+        return IARM_RESULT_INVALID_PARAM;
+    }
+
+    if (m_initialized && m_connected) {
+    	int isRegistered = 0;
+    	IARM_IsCallRegistered(m_member->selfName, IARM_BUS_DAEMON_API_ReleaseOwnership, &isRegistered);
+    	if (isRegistered) {
+    //		log("Requestor [%s] has ReleaseOwnership\r\n", m_member->selfName);
+        	retCode = IARM_RESULT_SUCCESS;
+    	}
+    	else {
+    		log("Requestor [%s] does NOT has ReleaseOwnership\r\n", m_member->selfName);
+        	retCode = IARM_RESULT_INVALID_STATE;
+    	}
+
+    }
+
+    if (retCode == IARM_RESULT_SUCCESS && m_initialized && m_connected) {
+        IARM_Bus_Daemon_RequestOwnership_Param_t  req;
+        
+	rc = memcpy_s(&req.requestor,sizeof(req.requestor), m_member, sizeof(IARM_Bus_Member_t));
 	if(rc!=EOK)
 	{
 		ERR_CHK(rc);
 	}
 
-        dbus_error_free(&err); 
-        snprintf(busName, IARM_BUS_NAME_MAX_LEN - 1, "%s%s%s", "process.iarm.", memberName, ".Event");
-        ret = dbus_bus_request_name(cctx->connEvent, busName, DBUS_NAME_FLAG_REPLACE_EXISTING | DBUS_NAME_FLAG_ALLOW_REPLACEMENT, &err);
-        if ((dbus_error_is_set(&err)) || (DBUS_REQUEST_NAME_REPLY_PRIMARY_OWNER != ret))
+		req.resrcType = resrcType;
+        req.rpcResult = IARM_RESULT_SUCCESS;
+
+		retCode = IARM_Bus_Call(IARM_BUS_DAEMON_NAME, IARM_BUS_DAEMON_API_RequestOwnership, &req, sizeof(req));
+        if(req.rpcResult != IARM_RESULT_SUCCESS)
         {
-            log("%s Error Request to set the Dbus name on connEvent failed\n", __FUNCTION__);
-            dbus_error_free(&err); 
-            retCode = IARM_RESULT_IPCCORE_FAIL;
-            goto error;
+            retCode = req.rpcResult;
         }
-
-        dbus_error_free(&err); 
-        snprintf(busName, IARM_BUS_NAME_MAX_LEN - 1, "%s%s%s", "process.iarm.", memberName, ".Method");
-        ret = dbus_bus_request_name(cctx->connMethodCall, busName, DBUS_NAME_FLAG_REPLACE_EXISTING | DBUS_NAME_FLAG_ALLOW_REPLACEMENT, &err);
-        if ((dbus_error_is_set(&err)) || (DBUS_REQUEST_NAME_REPLY_PRIMARY_OWNER != ret))
-        {
-            log("%s Error Request to set the Dbus name on connMethodCall failed\n", __FUNCTION__);
-            dbus_error_free(&err); 
-            retCode = IARM_RESULT_IPCCORE_FAIL;
-            goto error;
-        }
-
-        dbus_error_free(&err); 
-
-        /* Add filter rules for methods and events */
-        dbus_bus_add_match(cctx->conn, "interface='iarm.signal.Type'", NULL);
-        dbus_bus_add_match(cctx->conn, "interface='iarm.method.Type'", NULL);
-
-                 rc = strcpy_s(cctx->groupName,sizeof(cctx->groupName), groupName);
-		 if(rc!=EOK)
-		 {
-			 ERR_CHK(rc);
-		 }
-                 rc = strcpy_s(cctx->memberName,sizeof(cctx->memberName), memberName);
-		 if(rc!=EOK)
-                 {	
-                         ERR_CHK(rc);
-                 }
-
-                     m_grpCtx = cctx;
-        retCode = IARM_RESULT_SUCCESS;
-        pthread_create(&(cctx->thread), NULL, &dispatchThread, (void *)cctx);
-        //pthread_create(&(cctx->threadMethodCall), NULL, &dispatchThreadMethodCall, (void *)cctx); 
-        //log("%s exit  \n", __FUNCTION__); 
-         }
+        if(retCode != IARM_RESULT_SUCCESS)
+            log("%s failed to request ownership with retCode %d \n", __FUNCTION__, retCode);
+    }
+    else {
+        retCode = IARM_RESULT_INVALID_STATE;
+		log("%s invalid state\n", __FUNCTION__);
+    }
+    IBUS_Unlock(lock);
+   // log("Exiting IARM_BusDaemon_RequestOwnership\r\n");
 
     return retCode;
-
-error:
-    IARM_Free(IARM_MEMTYPE_PROCESSLOCAL, cctx);
-     return retCode;
-}
-
-IARM_Result_t IARM_IsCallRegistered(const char *ownerName, const char *callName, int *isRegistered)
-{
-    IARM_Result_t retCode = IARM_RESULT_SUCCESS;
-    IARM_Ctx_t *grpCtx = m_grpCtx;
-    IARM_Ctx_t * cctx = (IARM_Ctx_t *)grpCtx;
-
-    if (!IARM_GrpCtx_IsValid(cctx) || callName == NULL)
-    {
-        retCode = IARM_RESULT_INVALID_PARAM;
-    }
-    else if ( ownerName == NULL || (strlen(ownerName) >= IARM_MAX_NAME_LEN))
-    {
-    	retCode = IARM_RESULT_INVALID_PARAM;
-    }
-    else if ( callName == NULL || (strlen(callName) >= IARM_MAX_NAME_LEN))
-    {
-    	retCode = IARM_RESULT_INVALID_PARAM;
-    }
-
-    //log("Entering [%s] - [%s][%s]\r\n", __FUNCTION__, ownerName, callName);
-
-    if (retCode == IARM_RESULT_SUCCESS)
-    {
-        char compId[IARM_MAX_NAME_LEN] = {0};
-        snprintf(compId, sizeof(compId), "%s_%s_%s", IARM_CALL_PREFIX, ownerName, callName);
-
-            	*isRegistered = 1;
-    }
-
-    return retCode;
-
 }
 
 /**
- * @brief Terminate the IARM module for the calling process.
- * 
- * This API is used to  terminate the IARM module for the calling process, and cleanup resources
- * used by MAF.
+ * @brief Notify UI Manager that the resource is released.
  *
- * @param [in] grpCtx Context of the process group.
+ * Upon success return, this client is no longer the owner of the resource.
+ *
+ * @param [in] resrcType: Resource type.
  *
  * @return IARM_Result_t Error Code.
  */
-IARM_Result_t IARM_Term(void)
+IARM_Result_t IARM_BusDaemon_ReleaseOwnership(IARM_Bus_ResrcType_t resrcType)
 {
+    errno_t rc = -1;
     IARM_Result_t retCode = IARM_RESULT_SUCCESS;
-    IARM_Ctx_t *grpCtx = m_grpCtx;
-    IARM_Ctx_t * cctx = (IARM_Ctx_t *)grpCtx;
+    /*log("Entering IARM_BusDaemon_ReleaseOwnership\r\n");*/
+
+    IARM_ASSERT(m_initialized && m_connected);
 
 
-    if (!IARM_GrpCtx_IsValid(cctx)) {
-        retCode = IARM_RESULT_INVALID_PARAM;
+    if( (resrcType < 0) || (resrcType >= IARM_BUS_RESOURCE_MAX))
+    {
+		log("%s invalid input\n", __FUNCTION__);
+        return IARM_RESULT_INVALID_PARAM;
     }
 
-    log("Entering [%s]\r\n", __FUNCTION__);
+    IBUS_Lock(lock);
 
-    if (retCode == IARM_RESULT_SUCCESS) {
-        cctx->isActive = 0;
-      
-        /* Signal threads to exit BEFORE closing connections */
-        pthread_mutex_lock(&(cctx->mutexConn));
-         cctx->exitStatus = cctx->exitStatus|DISPATCH_TERMINATE;
-        pthread_mutex_unlock(&(cctx->mutexConn));
+    if (m_initialized && m_connected) {
+    	IARM_Bus_Daemon_ReleaseOwnership_Param_t req;
+        
+	rc = memcpy_s(&req.requestor,sizeof(req.requestor), m_member, sizeof(IARM_Bus_Member_t));
+	if(rc!=EOK)
+	{
+		ERR_CHK(rc);
+	}
 
-        /* Wait for threads to complete before closing connections */
-        int join_ret = pthread_join(cctx->thread, NULL);
-        if (join_ret != 0) {
-            log("Error: pthread_join failed with code %d (%s)\r\n", join_ret, strerror(join_ret));
-        }
-
-        /* Now safe to close connections */
-
-        dbus_connection_close(cctx->conn);
-        dbus_connection_close(cctx->connMethodCall);
-        dbus_connection_close(cctx->connEvent);
-
-
-        pthread_mutex_lock (&(cctx->mutexConn));
-        /* Check if resources has been cleaned up */
+		req.resrcType = resrcType;
+        req.rpcResult = IARM_RESULT_SUCCESS;
+		retCode = IARM_Bus_Call(IARM_BUS_DAEMON_NAME, IARM_BUS_DAEMON_API_ReleaseOwnership, &req, sizeof(req));
+        if(req.rpcResult != IARM_RESULT_SUCCESS)
         {
-            GList *registeredMember = NULL;
-            GList *next = NULL;
-			for(registeredMember = (cctx->compList); registeredMember != NULL; registeredMember = registeredMember->next)
-			{ 
-				Component_Node_t *compNode = container_of((GList *)registeredMember->data, Component_Node_t, link);
-				//log("REMOVING Component [%s]\r\n", compNode->name);
-				cctx->compList = g_list_remove( cctx->compList, &compNode->link);
-				IARM_Free(IARM_MEMTYPE_PROCESSLOCAL, compNode);
-			}
+            retCode = req.rpcResult;
         }
-        DumpRegisteredComponents(cctx);
+        if(retCode != IARM_RESULT_SUCCESS)
+            log("%s failed to request ownership with retCode %d \n", __FUNCTION__, retCode);
+    }
+    else {
+        retCode = IARM_RESULT_INVALID_STATE;
+		log("%s invalid state\n", __FUNCTION__);
+    }
+    IBUS_Unlock(lock);
+   /* log("Exiting IARM_BusDaemon_ReleaseOwnership\r\n");*/
 
-        pthread_mutex_unlock (&(cctx->mutexConn));
+    return retCode;
+}
+/**
+ * @brief Send power pre change command
+ *
+ * Command is broadcasted before power change and all those modules implementing 
+ * power prechange function will be called. 
+ *
+ *
+ * @return IARM_Result_t Error Code.
+ */
 
-        pthread_mutex_destroy(&(cctx->mutexConn));
-        pthread_cond_destroy(&(cctx->condConn));
-        IARM_Free(IARM_MEMTYPE_PROCESSLOCAL, cctx);
-        DumpMemStat();
-        m_grpCtx = NULL;
+IARM_Result_t IARM_BusDaemon_PowerPrechange(IARM_Bus_CommonAPI_PowerPreChange_Param_t preChangeParam)
+{
+    IARM_Result_t retCode = IARM_RESULT_SUCCESS;
+    //log("Entering IARM_BusDaemon_PowerPrechange\r\n");
+
+    IARM_ASSERT(m_initialized && m_connected);
+
+    IBUS_Lock(lock);
+
+    if (m_initialized && m_connected) {
+
+    IARM_Bus_Daemon_PowerPreChange_Param_t param;    
+    param.newState = preChangeParam.newState;
+    param.curState = preChangeParam.curState;      
+
+    //log("calling Daemon  PowerPrechange\r\n");
+
+	retCode = IARM_Bus_Call(IARM_BUS_DAEMON_NAME, IARM_BUS_DAEMON_API_PowerPreChange, &param, sizeof(param));
+
+    if(retCode != IARM_RESULT_SUCCESS)
+        log("%s failed to invoke PowerPreChange method with retCode %d \n", __FUNCTION__, retCode);
+
+    }
+    else {
+        retCode = IARM_RESULT_INVALID_STATE;
+		log("%s invalid state\n", __FUNCTION__);
+    }
+    IBUS_Unlock(lock);
+    //log("Exiting IARM_BusDaemon_PowerPrechange\r\n");
+
+    return retCode;
+}
+
+
+/**
+ * @brief Send Deep Sleep Wakeup command
+ *
+ * Command is broadcasted to Deep sleep Manager for wkeup from deep sleep.
+ *
+ *
+ * @return IARM_Result_t Error Code.
+ */
+
+IARM_Result_t IARM_BusDaemon_DeepSleepWakeup(IARM_Bus_CommonAPI_PowerPreChange_Param_t preChangeParam)
+{
+    IARM_Result_t retCode = IARM_RESULT_SUCCESS;
+    /*log("Entering IARM_BusDaemon_DeepSleepWakeup\r\n");*/
+
+    IARM_ASSERT(m_initialized && m_connected);
+
+    IBUS_Lock(lock);
+
+    if (m_initialized && m_connected) {
+
+    IARM_Bus_Daemon_PowerPreChange_Param_t param;    
+    param.newState = preChangeParam.newState;
+    param.curState = preChangeParam.curState;      
+
+    log("calling Daemon  IARM_BusDaemon_DeepSleepWakeup\r\n");
+
+    retCode = IARM_Bus_Call(IARM_BUS_DAEMON_NAME, IARM_BUS_DAEMON_API_DeepSleepWakeup, &param, sizeof(param));
+
+    if(retCode != IARM_RESULT_SUCCESS)
+        log("%s failed to invoke DeepSleepWakeup method with retCode %d \n", __FUNCTION__, retCode);
+    }
+    else {
+        retCode = IARM_RESULT_INVALID_STATE;
+		log("%s invalid state\n", __FUNCTION__);
+    }
+    IBUS_Unlock(lock);
+    /*log("Exiting IARM_BusDaemon_DeepSleepWakeup\r\n");*/
+
+    return retCode;
+}
+
+/**
+ * @brief Send resolution pre change command
+ *
+ * Command is broadcasted before resolution change and all those modules implementing 
+ * resolution prechange function will be called. 
+ *
+ * @param [in] preChangeParam: height, width etc.
+ *
+ *
+ * @return IARM_Result_t Error Code.
+ */
+IARM_Result_t IARM_BusDaemon_ResolutionPrechange(IARM_Bus_CommonAPI_ResChange_Param_t preChangeParam)
+{
+    IARM_Result_t retCode = IARM_RESULT_SUCCESS;
+    /*log("Entering IARM_BusDaemon_ResolutionPrechange\r\n");*/
+
+    IARM_ASSERT(m_initialized && m_connected);
+
+    IBUS_Lock(lock);
+
+    if (m_initialized && m_connected) {
+        IARM_Bus_Daemon_ResolutionChange_Param_t param;
+        param.width = preChangeParam.width;
+        param.height = preChangeParam.height;
+        retCode = IARM_Bus_Call(IARM_BUS_DAEMON_NAME, IARM_BUS_DAEMON_API_ResolutionPreChange, &param, sizeof(param));
+
+        if(retCode != IARM_RESULT_SUCCESS)
+            log("%s failed to invoke ResolutionPreChange method with retCode %d \n", __FUNCTION__, retCode);
+    }
+    else {
+        retCode = IARM_RESULT_INVALID_STATE;
+		log("%s invalid state\n", __FUNCTION__);
+    }
+    IBUS_Unlock(lock);
+   /* log("Exiting IARM_BusDaemon_ResolutionPrechange\r\n");*/
+
+    return retCode;
+}
+
+
+/**
+ * @brief Send resolution post change command
+ *
+ * Command is broadcasted after resolution change and all those modules implementing 
+ * resolution post change handlers will be called. 
+ *
+ * @param [in] preChangeParam: height, width etc.
+ *
+ *
+ * @return IARM_Result_t Error Code.
+ */
+IARM_Result_t IARM_BusDaemon_ResolutionPostchange(IARM_Bus_CommonAPI_ResChange_Param_t postChangeParam)
+{
+    IARM_Result_t retCode = IARM_RESULT_SUCCESS;
+    /*log("Entering IARM_BusDaemon_ResolutionPostchange\r\n");*/
+
+    IARM_ASSERT(m_initialized && m_connected);
+
+    IBUS_Lock(lock);
+
+    if (m_initialized && m_connected) {
+        IARM_Bus_Daemon_ResolutionChange_Param_t param;
+        param.width = postChangeParam.width;
+        param.height = postChangeParam.height;
+        retCode = IARM_Bus_Call(IARM_BUS_DAEMON_NAME, IARM_BUS_DAEMON_API_ResolutionPostChange, &param, sizeof(param));
+        if(retCode != IARM_RESULT_SUCCESS)
+            log("%s failed to invoke ResolutionPostChange method with retCode %d \n", __FUNCTION__, retCode);
+    }
+    else {
+        retCode = IARM_RESULT_INVALID_STATE;
+		log("%s invalid state\n", __FUNCTION__);
+    }
+    IBUS_Unlock(lock);
+   /* log("Exiting IARM_BusDaemon_ResolutionPostchange\r\n");*/
+
+    return retCode;
+}
+
+/**
+ * @brief Reigster this member to the UI Manager.
+ *
+ * This API allows IARM member notify UI Manager of its presence.
+ *
+ * @param None.
+ *
+ * @return IARM_Result_t Error Code.
+ */
+static IARM_Result_t Register(void)
+{
+    IARM_Result_t retCode = IARM_RESULT_SUCCESS;
+    IARM_Result_t rc = IARM_RESULT_SUCCESS;
+    if (strcmp(m_member->selfName, IARM_BUS_DAEMON_NAME) != 0) {
+        log("Registering %s\r\n", m_member->selfName);
+    	rc = IARM_Call(IARM_BUS_DAEMON_NAME, IARM_BUS_DAEMON_API_RegisterMember, (void *)m_member, (int *)&retCode);
+        if((rc != IARM_RESULT_SUCCESS) || (retCode != IARM_RESULT_SUCCESS))
+            log(" %s failed to invoke RegisterMember method  rc:%d retCode:%d \n", __FUNCTION__,rc,retCode);
+    }
+    else {
+        log("NOT Registering %s\r\n", m_member->selfName);
+    }
+    if(rc != IARM_RESULT_SUCCESS) retCode = rc;
+  
+    return retCode;
+}
+
+/**
+ * @brief UnReigster this member to the UI Manager.
+ *
+ * This API allows IARM member notify UI Manager of its exit.
+ *
+ * @param None.
+ *
+ * @return IARM_Result_t Error Code.
+ */
+static IARM_Result_t UnRegister(void)
+{
+    IARM_Result_t retCode = IARM_RESULT_SUCCESS;
+    IARM_Result_t rc = IARM_RESULT_SUCCESS;
+    if (strcmp(m_member->selfName, IARM_BUS_DAEMON_NAME) != 0) {
+    	IARM_Call(IARM_BUS_DAEMON_NAME, IARM_BUS_DAEMON_API_UnRegisterMember, (void *)m_member, (int *)&retCode);
+        if((rc != IARM_RESULT_SUCCESS) || (retCode != IARM_RESULT_SUCCESS))
+            log("%s failed to invoke UnRegisterMember method\n", __FUNCTION__);
+    }
+    return IARM_RESULT_SUCCESS;
+}
+
+/**
+ * @brief Reigster Prechange API with Daemon.
+ *
+ * This API allows Daemon to have all Prechange call Records.
+ *
+ * @param None.
+ *
+ * @return IARM_Result_t Error Code.
+ */
+static IARM_Result_t RegisterPreChange(IARM_Bus_CallContext_t *callCtx)
+{
+    IARM_Result_t retCode = IARM_RESULT_SUCCESS;
+
+    if (strcmp(m_member->selfName, IARM_BUS_DAEMON_NAME) != 0) {
+
+        IARM_Bus_Daemon_RegisterPreChange_Param_t callParam;
+        
+        if ( (strcmp(callCtx->methodName,IARM_BUS_COMMON_API_ResolutionPreChange)  == 0) ||
+             (strcmp(callCtx->methodName,IARM_BUS_COMMON_API_ResolutionPostChange)  == 0) ||
+             (strcmp(callCtx->methodName,IARM_BUS_COMMON_API_PowerPreChange)  == 0) ||
+             (strcmp(callCtx->methodName,IARM_BUS_COMMON_API_DeepSleepWakeup)  == 0) ||
+             (strcmp(callCtx->methodName,IARM_BUS_COMMON_API_SysModeChange)  == 0) ) 
+        {    
+            //log("Registering Prechange %s-%s\r\n", callCtx->ownerName,callCtx->methodName);   
+            strncpy(callParam.ownerName,callCtx->ownerName, IARM_MAX_NAME_LEN-1);
+	    callParam.ownerName[IARM_MAX_NAME_LEN-1] = '\0';
+            strncpy(callParam.methodName,callCtx->methodName, IARM_MAX_NAME_LEN-1);
+	    callParam.methodName[IARM_MAX_NAME_LEN-1] = '\0';   //CID:136737 - Buffer size
+            retCode = IARM_Bus_Call(IARM_BUS_DAEMON_NAME,IARM_BUS_DAEMON_API_RegisterPreChange, &callParam, sizeof(callParam));
+            if(retCode != IARM_RESULT_SUCCESS)
+                log("%s failed to invoke RegisterPreChange method with retCode %d \n", __FUNCTION__, retCode);
+        }
+        else {
+            //log("Not Registering Prechange %s -%s\r\n", callCtx->ownerName,callCtx->methodName);
+        }
+
     }
     return retCode;
 }
 
 
-static void DumpMemStat(void)
+static void _BusCall_FuncWrapper(void *callCtx, unsigned long methodID, void *arg, void *serial)
 {
-    #if 0
-		log("MallocLocalCount %d, FreeLocalCount %d\r\n", mallocLocalCount, freeLocalCount);
-	#endif
+	//log("Entering [%s] - callCtx[%p]\r\n", __FUNCTION__, callCtx);
+
+	IARM_Bus_CallContext_t *cctx = (IARM_Bus_CallContext_t *)callCtx;
+	IARM_BusCall_t handler = (IARM_BusCall_t)cctx->handler;
+
+    void *handler_arg = arg;
+    iarm_otel_clear_incoming_tp();
+    if (arg) {
+        IARM_RPC_Envelope_t *env = (IARM_RPC_Envelope_t *)arg;
+        if (env->magic == IARM_OTEL_RPC_MAGIC) {
+            iarm_otel_set_incoming_tp(env->traceparent);
+            handler_arg = env->inner_arg;
+        }
+    }
+
+    IARM_Result_t retCode = handler(handler_arg);
+    iarm_otel_clear_incoming_tp();
+	//log("Returing [%s] - [%s][%s]\r\n", __FUNCTION__, cctx->ownerName, cctx->methodName);
+
+    IARM_CallReturn(cctx->ownerName, cctx->methodName, handler_arg, retCode, serial);
 }
 
-static void DumpRegisteredComponents(IARM_Ctx_t * cctx)
+static void _EventHandler_FuncWrapper (void *ctx, void *arg)
 {
-#if 0	
-	Component_Node_t *compNode = NULL;
-	GList *l = NULL;
-	
-	int i = 0;
-	log("=================+Registered Components+===========================\r\n");
-	for (l = cctx->compList; l != NULL; l = l->next)
-	{
-		compNode = container_of((GList *)l->data, Component_Node_t, link);
-	
-		log("COMP#%d - %s\r\n", i, compNode->name);
-		i++;
-	}
-	log("+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++\r\n\r\n");
-#endif
+    IARM_EventData_t *eventData = (IARM_EventData_t *)arg;
+    IARM_Bus_EventContext_t *cctx = NULL;
+
+    IBUS_Lock(lock);
+
+    GList *event_list = g_list_first(m_eventHandlerList);
+
+    if (event_list != NULL  && eventData != NULL)
+    {
+        do
+        {
+            /* event_list is checked for NULL before entering this loop */
+            /* coverity[NULL_FIELD : FALSE] */
+            cctx = (IARM_Bus_EventContext_t *)event_list->data;
+            if (cctx != NULL)
+            {
+                if ((strncmp(cctx->ownerName, eventData->owner,IARM_MAX_NAME_LEN) == 0)
+                        && (cctx->eventId == eventData->id))
+		{
+                    //log("Event Handler [%s]for Event [%d] will be  invoked\r\n", eventData->owner, eventData->id);
+                    if (cctx->handler != NULL) {
+                        unsigned char *suffix = (unsigned char *)eventData->data + eventData->len;
+                        iarm_otel_clear_incoming_tp();
+                        if (suffix[0] == IARM_OTEL_EVENT_MAGIC) {
+                            iarm_otel_set_incoming_tp((const char *)(suffix + 1));
+                        }
+                        cctx->handler(eventData->owner, eventData->id, (void *)&eventData->data, eventData->len);
+                        iarm_otel_clear_incoming_tp();
+                    }
+                }
+            }
+        } while ((event_list = g_list_next(event_list)) != NULL);
+    }
+    IBUS_Unlock(lock);
 }
 
+#define PID_BUF_SIZE 100
+/**
+ * @brief Write PID file
+ *
+ * This API allows Daemon to write PID file
+ *
+ * @param full pathname to pidfile to write
+ */
+void IARM_Bus_WritePIDFile(const char *path)
+{
+    char buf[PID_BUF_SIZE];
 
+    log("Writing PID file %s\n", path);
+    int fd = open(path, O_RDWR | O_CREAT, S_IRUSR | S_IWUSR);
+    if (fd == -1)
+    {
+        log("ERROR opening PID file %s\n", path);
+    }
+    else
+    {
+        int len = snprintf(buf, PID_BUF_SIZE, "%ld\n", (long) getpid());
+        if ((len <= 0) || (write(fd, buf, len) != len))
+        {
+            log("ERROR writing to PID file %s\n", path);
+        }
+        close(fd);
+    }
+} 
