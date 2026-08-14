@@ -338,7 +338,6 @@ static IARM_Result_t _PowerPreChange(void *arg)
             IARM_Bus_CommonAPI_PowerPreChange_Param_t param;
             param.newState = reqIn->newState;
             param.curState = reqIn->curState;
-            //coverity fix: CHECKED_RETURN - check return value from IARM_Bus_Call
             IARM_Result_t callRet = IARM_Bus_Call(((IARM_Bus_Member_t *)registeredMember)->selfName, IARM_BUS_COMMON_API_PowerPreChange, &param, sizeof(param));
             if (callRet != IARM_RESULT_SUCCESS) {
                 log("%s failed to call PowerPreChange for %s with retCode %d\n", __FUNCTION__, ((IARM_Bus_Member_t *)registeredMember)->selfName, callRet);
@@ -369,7 +368,6 @@ static IARM_Result_t _DeepSleepWakeup(void *arg)
             IARM_Bus_CommonAPI_PowerPreChange_Param_t param;
             param.newState = reqIn->newState;
             param.curState = reqIn->curState;
-            //coverity fix: CHECKED_RETURN - check return value from IARM_Bus_Call
             IARM_Result_t callRet = IARM_Bus_Call(((IARM_Bus_Member_t *)registeredMember)->selfName, IARM_BUS_COMMON_API_DeepSleepWakeup, &param, sizeof(param));
             if (callRet != IARM_RESULT_SUCCESS) {
                 log("%s failed to call DeepSleepWakeup for %s with retCode %d\n", __FUNCTION__, ((IARM_Bus_Member_t *)registeredMember)->selfName, callRet);
@@ -402,7 +400,6 @@ static IARM_Result_t _ResolutionPreChange(void *arg)
             IARM_Bus_CommonAPI_ResChange_Param_t param;
             param.width  = reqIn->width;
             param.height = reqIn->height; 
-            //coverity fix: CHECKED_RETURN - check return value from IARM_Bus_Call
             IARM_Result_t callRet = IARM_Bus_Call(((IARM_Bus_Member_t *)registeredMember)->selfName, IARM_BUS_COMMON_API_ResolutionPreChange, 
                             &param, sizeof(param));
             if (callRet != IARM_RESULT_SUCCESS) {
@@ -434,7 +431,6 @@ static IARM_Result_t _ResolutionPostChange(void *arg)
             IARM_Bus_CommonAPI_ResChange_Param_t param;
             param.width  = reqIn->width;
             param.height = reqIn->height; 
-            //coverity fix: CHECKED_RETURN - check return value from IARM_Bus_Call
             IARM_Result_t callRet = IARM_Bus_Call(((IARM_Bus_Member_t *)registeredMember)->selfName, IARM_BUS_COMMON_API_ResolutionPostChange, 
             &param, sizeof(param));
             if (callRet != IARM_RESULT_SUCCESS) {
@@ -467,7 +463,6 @@ static IARM_Result_t _SysModeChange(void *arg)
             IARM_Bus_CommonAPI_SysModeChange_Param_t param;
             param.oldMode = reqIn->oldMode;
             param.newMode = reqIn->newMode; 
-            //coverity fix: CHECKED_RETURN - check return value from IARM_Bus_Call
             IARM_Result_t callRet = IARM_Bus_Call(((IARM_Bus_Member_t *)registeredMember)->selfName, IARM_BUS_COMMON_API_SysModeChange, 
                                                                                         &param, sizeof(param));
             if (callRet != IARM_RESULT_SUCCESS) {
