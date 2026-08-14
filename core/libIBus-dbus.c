@@ -548,7 +548,6 @@ IARM_Result_t IARM_Bus_IsConnected(const char *memberName, int *isRegistered)
 
         req.isRegistered = 0;
 
-        //coverity fix: CHECKED_RETURN - check return value from IARM_Bus_Call
         IARM_Result_t callRet = IARM_Bus_Call(IARM_BUS_DAEMON_NAME, IARM_BUS_DAEMON_API_CheckRegistration, (void *)&req, sizeof(IARM_Bus_Daemon_CheckRegistration_Param_t));
         if (callRet != IARM_RESULT_SUCCESS) {
             log("%s IARM_Bus_Call failed with retCode %d\n", __FUNCTION__, callRet);
