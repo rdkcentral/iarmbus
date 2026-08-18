@@ -1242,7 +1242,17 @@ static void _BusCall_FuncWrapper(void *callCtx, unsigned long methodID, void *ar
     iarm_otel_clear_incoming_tp();
 	//log("Returing [%s] - [%s][%s]\r\n", __FUNCTION__, cctx->ownerName, cctx->methodName);
 
-    IARM_CallReturn(cctx->ownerName, cctx->methodName, handler_arg, retCode, serial);
+    /* Always pass the original 'arg' pointer to IARM_CallReturn.
+     * IARM_GetSize() reads size metadata stored before the allocation start
+     * (IARM_GetSize = *(size_t*)(ptr - _IARM_MEM_EXTRA_ALLOC_SIZE)).
+     * If we pass handler_arg (= env->inner_arg, a pointer into the middle of
+     * the allocation) IARM_GetSize reads garbage bytes from the envelope header,
+     * yielding an enormous size that triggers the DBus assertion:
+     *   "n_elements <= DBUS_MAXIMUM_ARRAY_LENGTH / alignment"
+     * The handler wrote its result into handler_arg which IS inside arg's
+     * allocation (at offset sizeof(IARM_RPC_Envelope_t)), so the response
+     * data is already in place — we just need the correct base pointer. */
+    IARM_CallReturn(cctx->ownerName, cctx->methodName, arg, retCode, serial);
 }
 
 static void _EventHandler_FuncWrapper (void *ctx, void *arg)
