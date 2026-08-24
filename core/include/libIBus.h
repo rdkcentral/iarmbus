@@ -306,15 +306,12 @@ IARM_Result_t IARM_Bus_RegisterCall(const char *methodName, IARM_BusCall_t handl
 IARM_Result_t IARM_Bus_Call(const char *ownerName,  const char *methodName, void *arg, size_t argLen);
 
 /**
- * @brief Invoke an RPC method with OpenTelemetry trace context propagation.
+ * @brief Compatibility wrapper for transparent RPC tracing.
  *
- * Identical to IARM_Bus_Call() but wraps the argument in an IARM_RPC_Envelope_t
- * that carries the caller's current W3C traceparent. The receiving process
- * can retrieve that parent context via IARM_Bus_GetCurrentIncomingTraceparent()
- * and decide in handler code whether to create child spans.
- *
- * If no active span exists on the calling thread, this function falls back to a
- * plain IARM_Bus_Call() with zero overhead.
+ * IARM_Bus_Call() now checks for a valid current traceparent on the calling
+ * thread and transparently wraps the payload in an IARM_RPC_Envelope_t whenever
+ * tracing is active. This compatibility helper simply delegates to the same
+ * transparent logic so older callers keep working without any behavior change.
  *
  * @param[in] ownerName  Well-known name of the target application.
  * @param[in] methodName Well-known name of the RPC method.
@@ -322,7 +319,6 @@ IARM_Result_t IARM_Bus_Call(const char *ownerName,  const char *methodName, void
  * @param[in] argLen     sizeof(*arg).
  *
  * @return Error Code — same set as IARM_Bus_Call().
- * @retval IARM_RESULT_OOM Indicates heap allocation failure for the envelope.
  */
 IARM_Result_t IARM_Bus_CallWithTracing(const char *ownerName, const char *methodName, void *arg, size_t argLen);
 
