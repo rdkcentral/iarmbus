@@ -628,15 +628,6 @@ IARM_Result_t IARM_Bus_Call(const char *ownerName,  const char *methodName, void
     return retCode;
 }
 
-
-IARM_Result_t IARM_Bus_CallWithTracing(const char *ownerName, const char *methodName, void *arg, size_t argLen)
-{
-    /* Compatibility wrapper: transparent tracing is now handled inside
-     * IARM_Bus_Call() whenever a valid traceparent is active for this thread.
-     */
-    return IARM_Bus_Call(ownerName, methodName, arg, argLen);
-}
-
 IARM_Result_t IARM_Bus_RegisterEvent(int maxEventId)
 {
     IARM_Result_t retCode = IARM_RESULT_SUCCESS;
