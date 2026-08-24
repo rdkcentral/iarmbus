@@ -48,12 +48,18 @@ extern "C" {
 #define IARM_OTEL_RPC_MAGIC     0x52504341U
 
 /**
- * RPC tracing envelope.  Only produced by IARM_Bus_CallWithTracing() (new
- * opt-in API).  IARM_Bus_Call() is unchanged and never wraps an envelope, so
- * all existing callers continue to work without modification.
+ * RPC tracing envelope.
+ *
+ * A valid current W3C traceparent is automatically wrapped into this envelope
+ * by IARM_Bus_Call() when the caller is already inside a traced flow. This
+ * preserves the original API contract while allowing the receiver to access the
+ * incoming traceparent without changing the handler's argument layout.
+ *
+ * IARM_Bus_CallWithTracing() remains as a compatibility alias for the same
+ * transparent behavior when an older caller explicitly asks for it.
  *
  * _BusCall_FuncWrapper detects the magic, peels the envelope, and calls the
- * registered handler with inner_arg only.  The handler never sees the envelope.
+ * registered handler with inner_arg only. The handler never sees the envelope.
  */
 typedef struct {
     uint32_t magic;                              /* IARM_OTEL_RPC_MAGIC          */
