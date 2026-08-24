@@ -737,41 +737,62 @@ IARM_Result_t IARM_Bus_Call(const char *ownerName,  const char *methodName, void
 {
     errno_t rc = -1;
     IARM_Result_t retCode = IARM_RESULT_SUCCESS;
+    IARM_Result_t retVal = IARM_RESULT_SUCCESS;
+    void *argOut = NULL;
+    void *payload = arg;
+    size_t payloadLen = argLen;
+    IARM_RPC_Envelope_t *env = NULL;
 
 	IARM_ASSERT(m_initialized && m_connected);
 
     IBUS_Lock(lock);
 
     if (m_initialized && m_connected) {
-        void *argOut = NULL;
-        
+        const char *tp = iarm_otel_get_current_traceparent();
+        if (tp && iarm_tp_valid(tp) && arg != NULL && argLen > 0) {
+            payloadLen = sizeof(IARM_RPC_Envelope_t) + argLen;
+            env = (IARM_RPC_Envelope_t *)malloc(payloadLen);
+            if (!env) {
+                retCode = IARM_RESULT_OOM;
+                IBUS_Unlock(lock);
+                return retCode;
+            }
+
+            env->magic = IARM_OTEL_RPC_MAGIC;
+            memcpy(env->traceparent, tp, IARM_OTEL_TP_LEN);
+            env->traceparent[IARM_OTEL_TP_LEN] = '\0';
+            env->inner_len = argLen;
+            memcpy(env->inner_arg, arg, argLen);
+            payload = env;
+        }
+
         //log("Final call to %s-%s\r\n", ownerName, methodName);
 
         /* even if there is no arg we still need to send _IARM_MEM_EXTRA_ALLOC_SIZE byte header allocated by IARM_Malloc, in this case use 1 byte dummy arg */
-        retCode = IARM_Malloc(IARM_MEMTYPE_PROCESSLOCAL, (arg != NULL) ? argLen : 1, (void **)&argOut);
+        retCode = IARM_Malloc(IARM_MEMTYPE_PROCESSLOCAL, (payload != NULL) ? payloadLen : 1, (void **)&argOut);
         
         if (retCode == IARM_RESULT_SUCCESS) {
-            if(arg != NULL)
+            if(payload != NULL)
             {
-                
-		rc = memcpy_s(argOut,argLen, arg, argLen);
+                rc = memcpy_s(argOut, payloadLen, payload, payloadLen);
 		if(rc!=EOK)
 		{
 			ERR_CHK(rc);
 		}
-
             }
-            IARM_Result_t retVal = IARM_RESULT_SUCCESS;
+            retVal = IARM_RESULT_SUCCESS;
             retCode = IARM_Call(ownerName, methodName, argOut, (int *)&retVal);
             if ((retCode == IARM_RESULT_SUCCESS) && (argOut != NULL))
             {
-                
-		rc = memcpy_s(arg,argLen,argOut,argLen);
-		if(rc!=EOK)
-                {
-                        ERR_CHK(rc);
+                if (env != NULL) {
+                    memcpy(arg, ((IARM_RPC_Envelope_t *)argOut)->inner_arg, argLen);
+                } else if (arg != NULL) {
+		    rc = memcpy_s(arg,argLen,argOut,argLen);
+		    if(rc!=EOK)
+                    {
+                            ERR_CHK(rc);
+                    }
                 }
-
             }
             IARM_Free(IARM_MEMTYPE_PROCESSLOCAL, argOut);
             if(retCode == IARM_RESULT_SUCCESS)
@@ -786,6 +807,8 @@ IARM_Result_t IARM_Bus_Call(const char *ownerName,  const char *methodName, void
         }
         else
             log("%s failed to allocated memory for the method invocation %s with retCode %d \n", __FUNCTION__, methodName, retCode);
+
+        free(env);
     }
     else {
         retCode = IARM_RESULT_INVALID_STATE;
@@ -798,28 +821,10 @@ IARM_Result_t IARM_Bus_Call(const char *ownerName,  const char *methodName, void
 
 IARM_Result_t IARM_Bus_CallWithTracing(const char *ownerName, const char *methodName, void *arg, size_t argLen)
 {
-    const char *tp = iarm_otel_get_current_traceparent();
-    if (!tp || !iarm_tp_valid(tp)) {
-        return IARM_Bus_Call(ownerName, methodName, arg, argLen);
-    }
-
-    size_t env_size = sizeof(IARM_RPC_Envelope_t) + argLen;
-    IARM_RPC_Envelope_t *env = (IARM_RPC_Envelope_t *)malloc(env_size);
-    if (!env) {
-        return IARM_RESULT_OOM;
-    }
-
-    env->magic = IARM_OTEL_RPC_MAGIC;
-    strncpy(env->traceparent, tp, IARM_OTEL_TP_LEN);
-    env->traceparent[IARM_OTEL_TP_LEN] = '\0';
-    env->inner_len = argLen;
-    memcpy(env->inner_arg, arg, argLen);
-
-    IARM_Result_t retCode = IARM_Bus_Call(ownerName, methodName, env, env_size);
-    memcpy(arg, env->inner_arg, argLen);
-
-    free(env);
-    return retCode;
+    /* Compatibility wrapper: transparent tracing is now handled inside
+     * IARM_Bus_Call() whenever a valid traceparent is active for this thread.
+     */
+    return IARM_Bus_Call(ownerName, methodName, arg, argLen);
 }
 
 
