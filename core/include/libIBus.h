@@ -306,23 +306,6 @@ IARM_Result_t IARM_Bus_RegisterCall(const char *methodName, IARM_BusCall_t handl
 IARM_Result_t IARM_Bus_Call(const char *ownerName,  const char *methodName, void *arg, size_t argLen);
 
 /**
- * @brief Compatibility wrapper for transparent RPC tracing.
- *
- * IARM_Bus_Call() now checks for a valid current traceparent on the calling
- * thread and transparently wraps the payload in an IARM_RPC_Envelope_t whenever
- * tracing is active. This compatibility helper simply delegates to the same
- * transparent logic so older callers keep working without any behavior change.
- *
- * @param[in] ownerName  Well-known name of the target application.
- * @param[in] methodName Well-known name of the RPC method.
- * @param[in] arg        Data structure with input/output parameters.
- * @param[in] argLen     sizeof(*arg).
- *
- * @return Error Code — same set as IARM_Bus_Call().
- */
-IARM_Result_t IARM_Bus_CallWithTracing(const char *ownerName, const char *methodName, void *arg, size_t argLen);
-
-/**
  * @brief Get the incoming W3C traceparent currently being dispatched.
  *
  * During event/RPC dispatch in patched libIARMBus, this returns the propagated
