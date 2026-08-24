@@ -559,38 +559,66 @@ IARM_Result_t IARM_Bus_Call(const char *ownerName,  const char *methodName, void
 {
     errno_t rc = -1;
     IARM_Result_t retCode = IARM_RESULT_SUCCESS;
+    IARM_Result_t retVal = IARM_RESULT_SUCCESS;
+    void *argOut = NULL;
+    void *payload = arg;
+    size_t payloadLen = argLen;
+    IARM_RPC_Envelope_t *env = NULL;
 
 	IARM_ASSERT(m_initialized && m_connected);
 
     IBUS_Lock(lock);
 
     if (m_initialized && m_connected) {
-        void *argOut = NULL;
-        
-        log("Final call to %s-%s\r\n", ownerName, methodName);
-        if(arg != NULL)
-        {
-            retCode = IARM_Malloc(IARM_MEMTYPE_PROCESSSHARE, argLen, (void **)&argOut);
-            
-	    rc = memcpy_s(argOut, argLen, arg, argLen);
-	    if(rc != EOK)
-	    {
-		    ERR_CHK(rc);
-	    }
+        const char *tp = iarm_otel_get_current_traceparent();
+        if (tp && iarm_tp_valid(tp) && arg != NULL && argLen > 0) {
+            payloadLen = sizeof(IARM_RPC_Envelope_t) + argLen;
+            env = (IARM_RPC_Envelope_t *)malloc(payloadLen);
+            if (!env) {
+                retCode = IARM_RESULT_OOM;
+                IBUS_Unlock(lock);
+                return retCode;
+            }
 
+            env->magic = IARM_OTEL_RPC_MAGIC;
+            memcpy(env->traceparent, tp, IARM_OTEL_TP_LEN);
+            env->traceparent[IARM_OTEL_TP_LEN] = '\0';
+            env->inner_len = argLen;
+            memcpy(env->inner_arg, arg, argLen);
+            payload = env;
         }
-        IARM_Call(ownerName, methodName, argOut, (int *)&retCode);
-        if(argOut != NULL)
-        {
-            
-	    rc = memcpy_s(arg, argLen, argOut, argLen);
-	    if(rc != EOK)
-            {
-                    ERR_CHK(rc);
+
+        log("Final call to %s-%s\r\n", ownerName, methodName);
+        retCode = IARM_Malloc(IARM_MEMTYPE_PROCESSSHARE, (payload != NULL) ? payloadLen : 1, (void **)&argOut);
+        if (retCode == IARM_RESULT_SUCCESS) {
+            if (payload != NULL) {
+	            rc = memcpy_s(argOut, payloadLen, payload, payloadLen);
+	            if(rc != EOK)
+	            {
+		        ERR_CHK(rc);
+	            }
+            }
+
+            retVal = IARM_RESULT_SUCCESS;
+            retCode = IARM_Call(ownerName, methodName, argOut, (int *)&retVal);
+            if ((retCode == IARM_RESULT_SUCCESS) && (argOut != NULL)) {
+                if (env != NULL) {
+                    memcpy(arg, ((IARM_RPC_Envelope_t *)argOut)->inner_arg, argLen);
+                } else if (arg != NULL) {
+	            rc = memcpy_s(arg, argLen, argOut, argLen);
+	            if(rc != EOK)
+                    {
+                            ERR_CHK(rc);
+                    }
+                }
             }
 
             IARM_Free(IARM_MEMTYPE_PROCESSSHARE, argOut);
+            if(retCode == IARM_RESULT_SUCCESS) {
+                retCode = retVal;
+            }
         }
+        free(env);
     }
     else {
         retCode = IARM_RESULT_INVALID_STATE;
@@ -603,35 +631,10 @@ IARM_Result_t IARM_Bus_Call(const char *ownerName,  const char *methodName, void
 
 IARM_Result_t IARM_Bus_CallWithTracing(const char *ownerName, const char *methodName, void *arg, size_t argLen)
 {
-    /* If no active span on this thread, fall back to a plain IARM_Bus_Call.
-     * iarm_otel_get_current_traceparent() resolves symbol via dlsym; if the
-     * tracer library is absent or no active span exists, this returns NULL. */
-    const char *tp = iarm_otel_get_current_traceparent();
-    if (!tp || !iarm_tp_valid(tp)) {
-        return IARM_Bus_Call(ownerName, methodName, arg, argLen);
-    }
-
-    /* Build the RPC envelope on the caller's heap (IARM_Bus_Call will copy it
-     * into a shared-memory block internally). */
-    size_t env_size = sizeof(IARM_RPC_Envelope_t) + argLen;
-    IARM_RPC_Envelope_t *env = (IARM_RPC_Envelope_t *)malloc(env_size);
-    if (!env) {
-        return IARM_RESULT_OOM;
-    }
-
-    env->magic = IARM_OTEL_RPC_MAGIC;
-    strncpy(env->traceparent, tp, IARM_OTEL_TP_LEN);
-    env->traceparent[IARM_OTEL_TP_LEN] = '\0';
-    env->inner_len = argLen;
-    memcpy(env->inner_arg, arg, argLen);
-
-    log("Final call (with tracing) to %s-%s\r\n", ownerName, methodName);
-    IARM_Result_t retCode = IARM_Bus_Call(ownerName, methodName, env, env_size);
-
-    /* IARM_Bus_Call copied the handler's result back into env->inner_arg */
-    memcpy(arg, env->inner_arg, argLen);
-    free(env);
-    return retCode;
+    /* Compatibility wrapper: transparent tracing is now handled inside
+     * IARM_Bus_Call() whenever a valid traceparent is active for this thread.
+     */
+    return IARM_Bus_Call(ownerName, methodName, arg, argLen);
 }
 
 IARM_Result_t IARM_Bus_RegisterEvent(int maxEventId)
