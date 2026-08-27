@@ -20,7 +20,7 @@
 SUBDIRS =
 DIST_SUBDIRS =
 
-SOLIBLDFLAGS = -ldbus-1 -lglib-2.0
+SOLIBLDFLAGS = -ldbus-1 -lglib-2.0 -ldl
 
 INCLUDE_FILES = -I=$(includedir)/directfb \
                 -I=$(includedir)/glib-2.0 \

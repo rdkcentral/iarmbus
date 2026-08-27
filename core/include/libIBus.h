@@ -306,6 +306,23 @@ IARM_Result_t IARM_Bus_RegisterCall(const char *methodName, IARM_BusCall_t handl
 IARM_Result_t IARM_Bus_Call(const char *ownerName,  const char *methodName, void *arg, size_t argLen);
 
 /**
+ * @brief Get the incoming W3C traceparent currently being dispatched.
+ *
+ * During event/RPC dispatch in patched libIARMBus, this returns the propagated
+ * parent trace context for the current thread if present, else NULL.
+ *
+ * This API enables a transport-only tracing model: IARM only transports
+ * traceparent, and the receiver handler decides whether to start/finish a
+ * child span.
+ *
+ * Thread-local lifetime: valid only within the active handler invocation
+ * (event callback or RPC handler) on the current thread.
+ *
+ * @return Pointer to a 55-char W3C traceparent string, or NULL.
+ */
+const char *IARM_Bus_GetCurrentIncomingTraceparent(void);
+
+/**
  * @brief This API is used to Invoke RPC method by its application name and method
  * name with specified timeout to wait for response.
  *
