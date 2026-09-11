@@ -54,6 +54,7 @@ do
         exit 0
     fi
 
+    log "Next polling in ${POLL_INTERVAL}s"
     sleep "$POLL_INTERVAL"
     elapsed=$((elapsed + POLL_INTERVAL))
 done
