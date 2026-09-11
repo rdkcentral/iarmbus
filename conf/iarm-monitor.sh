@@ -15,10 +15,10 @@ LOG_FILE="/opt/logs/uimgr_log.txt"
 TAG="[iarm-monitor:${SERVICE_NAME}]"
 
 POLL_INTERVAL=5
-MAX_WAIT=180
+MAX_WAIT=45
 
 log() {
-    echo "${TAG} $*" >> "${LOG_FILE}"
+    echo "`/bin/timestamp` :${TAG} $*" >> "${LOG_FILE}"
 }
 
 # Send SIGABRT to the process (if still running), wait for breakpad, then reboot.
