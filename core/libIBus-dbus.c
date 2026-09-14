@@ -42,6 +42,8 @@
 
 #include "safec_lib.h"
 
+#include "iarm_tp.h"
+
 typedef struct _IARM_Bus_CallContext_t {
 	char ownerName[IARM_MAX_NAME_LEN];
 	char methodName[IARM_MAX_NAME_LEN];
@@ -69,6 +71,70 @@ static volatile int m_connected = 0;
 static IARM_Result_t Register(void);
 static IARM_Result_t UnRegister(void);
 static IARM_Result_t RegisterPreChange(IARM_Bus_CallContext_t *callCtx);
+
+#ifdef OTEL_ENABLED
+/* Outgoing traceparent set by the caller for the next IARM_Bus_Call()/
+ * IARM_Bus_BroadcastEvent() on this thread; consumed (and cleared) by that call. */
+static __thread char s_iarm_outgoing_tp[IARM_TP_LEN + 1];
+static __thread int s_iarm_outgoing_tp_valid = 0;
+
+/* Incoming traceparent exposed to the handler currently executing on this thread. */
+static __thread char s_iarm_incoming_tp[IARM_TP_LEN + 1];
+static __thread int s_iarm_incoming_tp_valid = 0;
+
+void IARM_Bus_SetTraceparent(const char *traceparent)
+{
+    if (traceparent && iarm_tp_valid(traceparent)) {
+        memcpy(s_iarm_outgoing_tp, traceparent, IARM_TP_LEN);
+        s_iarm_outgoing_tp[IARM_TP_LEN] = '\0';
+        s_iarm_outgoing_tp_valid = 1;
+    } else {
+        s_iarm_outgoing_tp[0] = '\0';
+        s_iarm_outgoing_tp_valid = 0;
+    }
+}
+
+const char *IARM_Bus_GetTraceparent(void)
+{
+    return s_iarm_incoming_tp_valid ? s_iarm_incoming_tp : NULL;
+}
+
+/* Single-shot consume: copies the pending outgoing traceparent (if any) into
+ * out_buf and clears it so it is not reused by a later, unrelated call. */
+static int iarm_tp_take_outgoing(char *out_buf)
+{
+    if (!s_iarm_outgoing_tp_valid) return 0;
+    memcpy(out_buf, s_iarm_outgoing_tp, IARM_TP_LEN + 1);
+    s_iarm_outgoing_tp_valid = 0;
+    s_iarm_outgoing_tp[0] = '\0';
+    return 1;
+}
+
+static void iarm_tp_set_incoming(const char *tp)
+{
+    if (tp && iarm_tp_valid(tp)) {
+        memcpy(s_iarm_incoming_tp, tp, IARM_TP_LEN);
+        s_iarm_incoming_tp[IARM_TP_LEN] = '\0';
+        s_iarm_incoming_tp_valid = 1;
+    }
+}
+
+static void iarm_tp_clear_incoming(void)
+{
+    s_iarm_incoming_tp[0] = '\0';
+    s_iarm_incoming_tp_valid = 0;
+}
+#else
+void IARM_Bus_SetTraceparent(const char *traceparent)
+{
+    (void)traceparent;
+}
+
+const char *IARM_Bus_GetTraceparent(void)
+{
+    return NULL;
+}
+#endif /* OTEL_ENABLED */
 
 static void _BusCall_FuncWrapper(void *callCtx, unsigned long methodID, void *arg, void *serial);
 static void _EventHandler_FuncWrapper (void *ctx, void *arg);
@@ -296,7 +362,14 @@ IARM_Result_t IARM_Bus_BroadcastEvent(const char *ownerName, IARM_EventId_t even
     }
 	else {
         IARM_EventData_t *eventData = NULL;
-        IARM_Malloc(IARM_MEMTYPE_PROCESSLOCAL, sizeof(IARM_EventData_t) + len, (void **)&eventData);
+#ifdef OTEL_ENABLED
+        char pending_tp[IARM_TP_LEN + 1];
+        int has_tp = iarm_tp_take_outgoing(pending_tp);
+        size_t allocLen = sizeof(IARM_EventData_t) + len + (has_tp ? IARM_TP_SUFFIX_SIZE : 0);
+#else
+        size_t allocLen = sizeof(IARM_EventData_t) + len;
+#endif
+        IARM_Malloc(IARM_MEMTYPE_PROCESSLOCAL, allocLen, (void **)&eventData);
 		strncpy(eventData->owner, ownerName, IARM_MAX_NAME_LEN -1);
 		eventData->owner[IARM_MAX_NAME_LEN -1] = '\0';
 		eventData->id = eventId;
@@ -307,6 +380,15 @@ IARM_Result_t IARM_Bus_BroadcastEvent(const char *ownerName, IARM_EventId_t even
 		{
 			ERR_CHK(rc);
 		}
+
+#ifdef OTEL_ENABLED
+        if (has_tp) {
+            unsigned char *suffix = (unsigned char *)&eventData->data + len;
+            suffix[0] = IARM_TP_EVENT_MAGIC;
+            memcpy(suffix + 1, pending_tp, IARM_TP_LEN);
+            suffix[1 + IARM_TP_LEN] = '\0';
+        }
+#endif
 
 		//log("[%s\r\n", __FUNCTION__);
         retCode = IARM_NotifyEvent(ownerName, (IARM_EventId_t)eventId, (void *)eventData);
@@ -698,24 +780,45 @@ IARM_Result_t IARM_Bus_Call(const char *ownerName,  const char *methodName, void
 {
     errno_t rc = -1;
     IARM_Result_t retCode = IARM_RESULT_SUCCESS;
+    void *argOut = NULL;
+    void *payload = arg;
+    size_t payloadLen = argLen;
+#ifdef OTEL_ENABLED
+    IARM_RPC_TP_Envelope_t *env = NULL;
+    char pending_tp[IARM_TP_LEN + 1];
+#endif
 
 	IARM_ASSERT(m_initialized && m_connected);
 
     IBUS_Lock(lock);
 
     if (m_initialized && m_connected) {
-        void *argOut = NULL;
-        
+#ifdef OTEL_ENABLED
+        if (arg != NULL && argLen > 0 && iarm_tp_take_outgoing(pending_tp)) {
+            payloadLen = sizeof(IARM_RPC_TP_Envelope_t) + argLen;
+            env = (IARM_RPC_TP_Envelope_t *)malloc(payloadLen);
+            if (!env) {
+                IBUS_Unlock(lock);
+                return IARM_RESULT_OOM;
+            }
+            env->magic = IARM_RPC_TP_MAGIC;
+            memcpy(env->traceparent, pending_tp, IARM_TP_LEN + 1);
+            env->inner_len = argLen;
+            memcpy(env->inner_arg, arg, argLen);
+            payload = env;
+        }
+#endif
+
         //log("Final call to %s-%s\r\n", ownerName, methodName);
 
         /* even if there is no arg we still need to send _IARM_MEM_EXTRA_ALLOC_SIZE byte header allocated by IARM_Malloc, in this case use 1 byte dummy arg */
-        retCode = IARM_Malloc(IARM_MEMTYPE_PROCESSLOCAL, (arg != NULL) ? argLen : 1, (void **)&argOut);
+        retCode = IARM_Malloc(IARM_MEMTYPE_PROCESSLOCAL, (payload != NULL) ? payloadLen : 1, (void **)&argOut);
         
         if (retCode == IARM_RESULT_SUCCESS) {
-            if(arg != NULL)
+            if(payload != NULL)
             {
                 
-		rc = memcpy_s(argOut,argLen, arg, argLen);
+		rc = memcpy_s(argOut,payloadLen, payload, payloadLen);
 		if(rc!=EOK)
 		{
 			ERR_CHK(rc);
@@ -726,11 +829,17 @@ IARM_Result_t IARM_Bus_Call(const char *ownerName,  const char *methodName, void
             retCode = IARM_Call(ownerName, methodName, argOut, (int *)&retVal);
             if ((retCode == IARM_RESULT_SUCCESS) && (argOut != NULL))
             {
-                
+#ifdef OTEL_ENABLED
+                if (env != NULL) {
+                    memcpy(arg, ((IARM_RPC_TP_Envelope_t *)argOut)->inner_arg, argLen);
+                } else
+#endif
+                {
 		rc = memcpy_s(arg,argLen,argOut,argLen);
 		if(rc!=EOK)
                 {
                         ERR_CHK(rc);
+                }
                 }
 
             }
@@ -747,6 +856,10 @@ IARM_Result_t IARM_Bus_Call(const char *ownerName,  const char *methodName, void
         }
         else
             log("%s failed to allocated memory for the method invocation %s with retCode %d \n", __FUNCTION__, methodName, retCode);
+
+#ifdef OTEL_ENABLED
+        free(env);
+#endif
     }
     else {
         retCode = IARM_RESULT_INVALID_STATE;
@@ -1162,10 +1275,29 @@ static void _BusCall_FuncWrapper(void *callCtx, unsigned long methodID, void *ar
 
 	IARM_Bus_CallContext_t *cctx = (IARM_Bus_CallContext_t *)callCtx;
 	IARM_BusCall_t handler = (IARM_BusCall_t)cctx->handler;
-	IARM_Result_t retCode = handler(arg);
+
+    void *handler_arg = arg;
+#ifdef OTEL_ENABLED
+    iarm_tp_clear_incoming();
+    if (arg) {
+        IARM_RPC_TP_Envelope_t *env = (IARM_RPC_TP_Envelope_t *)arg;
+        if (env->magic == IARM_RPC_TP_MAGIC) {
+            iarm_tp_set_incoming(env->traceparent);
+            handler_arg = env->inner_arg;
+        }
+    }
+#endif
+
+    IARM_Result_t retCode = handler(handler_arg);
+#ifdef OTEL_ENABLED
+    iarm_tp_clear_incoming();
+#endif
 	//log("Returing [%s] - [%s][%s]\r\n", __FUNCTION__, cctx->ownerName, cctx->methodName);
 
-	IARM_CallReturn(cctx->ownerName, cctx->methodName, arg, retCode, serial);
+    /* Always pass the original 'arg' pointer to IARM_CallReturn - it is the base of
+     * the allocation IARM_GetSize() reads size metadata from; handler_arg may point
+     * into the middle of it (past the envelope header) when an envelope was used. */
+    IARM_CallReturn(cctx->ownerName, cctx->methodName, arg, retCode, serial);
 }
 
 static void _EventHandler_FuncWrapper (void *ctx, void *arg)
@@ -1190,8 +1322,19 @@ static void _EventHandler_FuncWrapper (void *ctx, void *arg)
                         && (cctx->eventId == eventData->id))
 		{
                     //log("Event Handler [%s]for Event [%d] will be  invoked\r\n", eventData->owner, eventData->id);
-                    if (cctx->handler != NULL)
+                    if (cctx->handler != NULL) {
+#ifdef OTEL_ENABLED
+                        unsigned char *suffix = (unsigned char *)eventData->data + eventData->len;
+                        iarm_tp_clear_incoming();
+                        if (suffix[0] == IARM_TP_EVENT_MAGIC) {
+                            iarm_tp_set_incoming((const char *)(suffix + 1));
+                        }
+#endif
                         cctx->handler(eventData->owner, eventData->id, (void *)&eventData->data, eventData->len);
+#ifdef OTEL_ENABLED
+                        iarm_tp_clear_incoming();
+#endif
+                    }
                 }
             }
         } while ((event_list = g_list_next(event_list)) != NULL);

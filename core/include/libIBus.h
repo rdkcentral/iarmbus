@@ -306,6 +306,39 @@ IARM_Result_t IARM_Bus_RegisterCall(const char *methodName, IARM_BusCall_t handl
 IARM_Result_t IARM_Bus_Call(const char *ownerName,  const char *methodName, void *arg, size_t argLen);
 
 /**
+ * @brief Provide the traceparent to propagate on the next outgoing IARM_Bus_Call()
+ * or IARM_Bus_BroadcastEvent() issued by this thread.
+ *
+ * The caller obtains its own current span context from its own tracing library
+ * (e.g. rdk_otlp_get_current_traceparent()) and passes the resulting string here.
+ * IARM treats the value as an opaque, format-validated string - it has no
+ * dependency on any tracing library. The value is consumed (and cleared) by the
+ * very next IARM_Bus_Call()/IARM_Bus_BroadcastEvent() on this thread; it does not
+ * persist across calls.
+ *
+ * No-op if libIARMBus was not built with OTEL_ENABLED (--enable-otel-tp).
+ *
+ * @param[in] traceparent W3C traceparent string ("00-<32hex>-<16hex>-<2hex>"), or
+ * NULL to clear a previously set value without sending it.
+ */
+void IARM_Bus_SetTraceparent(const char *traceparent);
+
+/**
+ * @brief Get the traceparent propagated by the sender for the RPC or event
+ * handler currently executing on this thread.
+ *
+ * Valid only while inside a handler invoked as a result of a sender call that
+ * used IARM_Bus_SetTraceparent(). The receiver passes the returned string to its
+ * own tracing library (e.g. rdk_otlp_start_child_from_traceparent()) to create a
+ * child span. IARM itself never calls into a tracing library.
+ *
+ * Always returns NULL if libIARMBus was not built with OTEL_ENABLED (--enable-otel-tp).
+ *
+ * @return Pointer to a 55-char W3C traceparent string, or NULL if none was propagated.
+ */
+const char *IARM_Bus_GetTraceparent(void);
+
+/**
  * @brief This API is used to Invoke RPC method by its application name and method
  * name with specified timeout to wait for response.
  *
