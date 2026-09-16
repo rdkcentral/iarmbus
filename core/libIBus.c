@@ -43,6 +43,11 @@
 
 #include "iarm_tp.h"
 
+#ifdef OTEL_ENABLED
+#define IARM_TP_NATIVE_SIZE_PREFIX (sizeof(size_t) + 8)
+#define IARM_TP_NATIVE_GET_SIZE(ptr) (*((size_t *)(((char *)(ptr)) - IARM_TP_NATIVE_SIZE_PREFIX)))
+#endif
+
 typedef struct _IARM_Bus_CallContext_t {
 	char ownerName[IARM_MAX_NAME_LEN];
 	char methodName[IARM_MAX_NAME_LEN];
@@ -78,6 +83,12 @@ static __thread int s_iarm_outgoing_tp_valid = 0;
 /* Incoming traceparent exposed to the handler currently executing on this thread. */
 static __thread char s_iarm_incoming_tp[IARM_TP_LEN + 1];
 static __thread int s_iarm_incoming_tp_valid = 0;
+static __thread size_t s_iarm_incoming_payload_size = 0;
+
+void IARM_Bus_SetIncomingPayloadSize(size_t size)
+{
+    s_iarm_incoming_payload_size = size;
+}
 
 void IARM_Bus_SetTraceparent(const char *traceparent)
 {
@@ -363,7 +374,7 @@ IARM_Result_t IARM_Bus_BroadcastEvent(const char *ownerName, IARM_EventId_t even
 #ifdef OTEL_ENABLED
         char pending_tp[IARM_TP_LEN + 1];
         int has_tp = iarm_tp_take_outgoing(pending_tp);
-        size_t allocLen = sizeof(IARM_EventData_t) + len + (has_tp ? IARM_TP_SUFFIX_SIZE : 0);
+    size_t allocLen = sizeof(IARM_EventData_t) + len + IARM_TP_SUFFIX_SIZE;
 #else
         size_t allocLen = sizeof(IARM_EventData_t) + len;
 #endif
@@ -385,11 +396,14 @@ IARM_Result_t IARM_Bus_BroadcastEvent(const char *ownerName, IARM_EventId_t even
 		}
 
 #ifdef OTEL_ENABLED
-        if (has_tp) {
+        {
             unsigned char *suffix = (unsigned char *)&eventData->data + len;
+            memset(suffix, 0, IARM_TP_SUFFIX_SIZE);
+        if (has_tp) {
             suffix[0] = IARM_TP_EVENT_MAGIC;
             memcpy(suffix + 1, pending_tp, IARM_TP_LEN);
             suffix[1 + IARM_TP_LEN] = '\0';
+        }
         }
 #endif
 
@@ -983,8 +997,12 @@ static void _BusCall_FuncWrapper(void *callCtx, unsigned long methodID, void *ar
 #ifdef OTEL_ENABLED
     iarm_tp_clear_incoming();
     if (arg) {
+        s_iarm_incoming_payload_size = IARM_TP_NATIVE_GET_SIZE(arg);
         IARM_RPC_TP_Envelope_t *env = (IARM_RPC_TP_Envelope_t *)arg;
-        if (env->magic == IARM_RPC_TP_MAGIC) {
+        if (s_iarm_incoming_payload_size >= sizeof(IARM_RPC_TP_Envelope_t) &&
+            env->magic == IARM_RPC_TP_MAGIC &&
+            env->inner_len == s_iarm_incoming_payload_size - sizeof(IARM_RPC_TP_Envelope_t) &&
+            iarm_tp_valid(env->traceparent)) {
             iarm_tp_set_incoming(env->traceparent);
             handler_arg = env->inner_arg;
         }
@@ -994,6 +1012,10 @@ static void _BusCall_FuncWrapper(void *callCtx, unsigned long methodID, void *ar
 	IARM_Result_t retCode = handler(handler_arg);
 #ifdef OTEL_ENABLED
     iarm_tp_clear_incoming();
+#endif
+
+#ifdef OTEL_ENABLED
+    s_iarm_incoming_payload_size = 0;
 #endif
 	/*log("Returing [%s] - [%s][%s]\r\n", __FUNCTION__, cctx->ownerName, cctx->methodName);*/
 
@@ -1022,9 +1044,15 @@ static void _EventHandler_FuncWrapper (void *ctx, void *arg)
 			/*log("Calling for event [%s][%d]\r\n", eventData->owner, cctx->eventId);*/
 #ifdef OTEL_ENABLED
             iarm_tp_clear_incoming();
+            if (eventData != NULL) {
+                s_iarm_incoming_payload_size = IARM_TP_NATIVE_GET_SIZE(eventData);
+            }
             {
                 unsigned char *suffix = (unsigned char *)eventData->data + eventData->len;
-                if (suffix[0] == IARM_TP_EVENT_MAGIC) {
+                if (s_iarm_incoming_payload_size >= sizeof(IARM_EventData_t) +
+                    eventData->len + IARM_TP_SUFFIX_SIZE &&
+                    suffix[0] == IARM_TP_EVENT_MAGIC &&
+                    iarm_tp_valid((const char *)(suffix + 1))) {
                     iarm_tp_set_incoming((const char *)(suffix + 1));
                 }
             }
@@ -1032,6 +1060,10 @@ static void _EventHandler_FuncWrapper (void *ctx, void *arg)
 			cctx->handler(eventData->owner, eventData->id, (void *)&eventData->data, eventData->len);
 #ifdef OTEL_ENABLED
             iarm_tp_clear_incoming();
+#endif
+
+#ifdef OTEL_ENABLED
+            s_iarm_incoming_payload_size = 0;
 #endif
 			
 		}
