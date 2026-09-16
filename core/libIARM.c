@@ -47,6 +47,9 @@ extern "C"
 #include "safec_lib.h"
 
 #define _IARM_MEM_MAGIC_SIZE    8
+#ifdef OTEL_ENABLED
+#define _IARM_TP_SIZE_PREFIX    sizeof(size_t)
+#endif
 
 #define _IARM_MEM_DEBUG
 #define _IARM_CTX_HEADER_MAGIC  0xCABFACE1
@@ -126,6 +129,10 @@ IARM_Result_t IARM_Malloc(IARM_MemType_t type, size_t size, void **ptr)
     IARM_Result_t retCode = IARM_RESULT_SUCCESS;
     DirectResult dRet = DR_OK;
     void *alloc = NULL;
+#ifdef OTEL_ENABLED
+    size_t requestedSize = size;
+    size += _IARM_TP_SIZE_PREFIX;
+#endif
 
 #ifdef _IARM_MEM_DEBUG
     size += _IARM_MEM_MAGIC_SIZE;
@@ -155,6 +162,10 @@ IARM_Result_t IARM_Malloc(IARM_MemType_t type, size_t size, void **ptr)
     }
 
     if (alloc != NULL) {
+#ifdef OTEL_ENABLED
+        *((size_t *)alloc) = requestedSize;
+        alloc = ((char *)alloc) + _IARM_TP_SIZE_PREFIX;
+#endif
 #ifdef _IARM_MEM_DEBUG
         unsigned int *p = (unsigned int *)alloc;
         *p = _IARM_MEM_HEADER_MAGIC + type;
@@ -208,6 +219,9 @@ IARM_Result_t IARM_Free(IARM_MemType_t type, void *alloc)
             IARM_ASSERT(hType == type);
             if (hType != type) {
             }
+#endif
+#ifdef OTEL_ENABLED
+            alloc = ((char *)alloc) - _IARM_TP_SIZE_PREFIX;
 #endif
             switch(type) {
                 case IARM_MEMTYPE_PROCESSLOCAL:
