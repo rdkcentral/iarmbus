@@ -43,6 +43,7 @@ extern "C"
 #include <glib.h>
 #include "libIARM.h"
 #include "libIARMCore.h"
+#include "libIBus.h"
 #include "libIBusDaemonInternal.h"
 #include <dbus/dbus.h>
 #include <stdbool.h>
@@ -319,6 +320,9 @@ DBusHandlerResult dbusCallHandler(DBusConnection *connection, DBusMessage *msg, 
                     
         dbus_message_iter_recurse(&arglist, &arraylist);
         dbus_message_iter_get_fixed_array(&arraylist, &eventArg, &size);
+    #ifdef OTEL_ENABLED
+        IARM_Bus_SetIncomingPayloadSize((size_t)size);
+    #endif
         eventInfo->listener(eventInfo->callCtx, eventArg);
 
         /* TODO: Add return DBUS_HANDLER_RESULT_HANDLED; here */
@@ -354,6 +358,11 @@ DBusHandlerResult dbusCallHandler(DBusConnection *connection, DBusMessage *msg, 
         dbus_message_iter_recurse(&arglist, &arraylist);
         dbus_message_iter_get_fixed_array(&arraylist, (void *)&callArg, &size);
         callArg += _IARM_MEM_EXTRA_ALLOC_SIZE;
+    #ifdef OTEL_ENABLED
+        IARM_Bus_SetIncomingPayloadSize(
+            (size >= _IARM_MEM_EXTRA_ALLOC_SIZE) ?
+            (size_t)size - _IARM_MEM_EXTRA_ALLOC_SIZE : 0);
+    #endif
 
         // Add null check for callInfo before using it
         if (callInfo == NULL || callInfo->handler == NULL) {
