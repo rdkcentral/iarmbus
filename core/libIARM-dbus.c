@@ -326,7 +326,9 @@ DBusHandlerResult dbusCallHandler(DBusConnection *connection, DBusMessage *msg, 
     else if (dbus_message_is_method_call(msg, "iarm.method.Type", callInfo->callName))
     {
         DBusMessageIter arglist, arraylist;
-        int size;
+        int declaredSize;
+        int arraySize;
+        size_t payloadSize;
         unsigned char *callArg;
         
         if(!dbus_message_iter_init(msg, &arglist))
@@ -341,7 +343,7 @@ DBusHandlerResult dbusCallHandler(DBusConnection *connection, DBusMessage *msg, 
             goto ignore;
         }
 
-        dbus_message_iter_get_basic(&arglist, &size);
+        dbus_message_iter_get_basic(&arglist, &declaredSize);
         dbus_message_iter_next(&arglist);
         
         if (dbus_message_iter_get_arg_type(&arglist) != DBUS_TYPE_ARRAY ||
@@ -352,15 +354,26 @@ DBusHandlerResult dbusCallHandler(DBusConnection *connection, DBusMessage *msg, 
         }
                     
         dbus_message_iter_recurse(&arglist, &arraylist);
-        dbus_message_iter_get_fixed_array(&arraylist, (void *)&callArg, &size);
+        dbus_message_iter_get_fixed_array(&arraylist, (void *)&callArg, &arraySize);
+        if (arraySize < _IARM_MEM_EXTRA_ALLOC_SIZE || declaredSize != arraySize)
+        {
+            log("%s Error method call sizes are inconsistent\n", __FUNCTION__);
+            goto ignore;
+        }
+        payloadSize = (size_t)(arraySize - _IARM_MEM_EXTRA_ALLOC_SIZE);
         callArg += _IARM_MEM_EXTRA_ALLOC_SIZE;
+        if (IARM_GetSize(callArg) > payloadSize)
+        {
+            log("%s Error method call allocation prefix exceeds payload\n", __FUNCTION__);
+            goto ignore;
+        }
 
         // Add null check for callInfo before using it
         if (callInfo == NULL || callInfo->handler == NULL) {
             printf("IARM: callInfo or handler is NULL in dbusCallHandler\n");
             return DBUS_HANDLER_RESULT_HANDLED;
         }
-        callInfo->handler(callInfo->callCtx, 0, (void *)callArg, (void *)msg);
+        callInfo->handler(callInfo->callCtx, (unsigned long)payloadSize, (void *)callArg, (void *)msg);
         return DBUS_HANDLER_RESULT_HANDLED;   
         }
     else if (!dbus_message_has_interface(msg, "iarm.method.Type"))
