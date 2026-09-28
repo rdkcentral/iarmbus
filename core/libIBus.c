@@ -97,7 +97,7 @@ int log(const char *format, ...)
     }
     else
     {
-        ret = printf(tmp_buff);
+        ret = printf("%s", tmp_buff);
     }
     return ret;	
 }
