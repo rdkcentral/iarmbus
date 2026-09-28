@@ -232,6 +232,45 @@ IARM_Result_t IARM_Free(IARM_MemType_t type, void *alloc)
     return IARM_RESULT_SUCCESS;
 }
 
+static dbus_bool_t isAuthenticatedEventSender(DBusConnection *connection, DBusMessage *msg, const char *ownerName)
+{
+    DBusError error;
+    char serviceName[IARM_BUS_NAME_MAX_LEN] = {0};
+    const char *sender = dbus_message_get_sender(msg);
+    const char *serviceNameArg = serviceName;
+    const char *registeredOwner = NULL;
+    DBusMessage *request;
+    DBusMessage *reply;
+    dbus_bool_t authenticated = FALSE;
+
+    if (connection == NULL || sender == NULL || ownerName == NULL || ownerName[0] == '\0' ||
+        strnlen(ownerName, IARM_MAX_NAME_LEN) == IARM_MAX_NAME_LEN) {
+        return FALSE;
+    }
+    if (snprintf(serviceName, sizeof(serviceName), "process.iarm.%s.Event", ownerName) >= (int)sizeof(serviceName)) {
+        return FALSE;
+    }
+
+    request = dbus_message_new_method_call(DBUS_SERVICE_DBUS, DBUS_PATH_DBUS,
+                                           DBUS_INTERFACE_DBUS, "GetNameOwner");
+    if (request == NULL || !dbus_message_append_args(request, DBUS_TYPE_STRING, &serviceNameArg,
+                                                      DBUS_TYPE_INVALID)) {
+        if (request != NULL) dbus_message_unref(request);
+        return FALSE;
+    }
+    dbus_error_init(&error);
+    reply = dbus_connection_send_with_reply_and_block(connection, request, 1000, &error);
+    dbus_message_unref(request);
+    if (reply != NULL && !dbus_error_is_set(&error) &&
+        dbus_message_get_args(reply, &error, DBUS_TYPE_STRING, &registeredOwner,
+                              DBUS_TYPE_INVALID)) {
+        authenticated = registeredOwner != NULL && strcmp(sender, registeredOwner) == 0;
+    }
+    if (reply != NULL) dbus_message_unref(reply);
+    dbus_error_free(&error);
+    return authenticated;
+}
+
 DBusHandlerResult dbusCallHandler(DBusConnection *connection, DBusMessage *msg, void *user_data)
 {
     try {
@@ -293,6 +332,12 @@ DBusHandlerResult dbusCallHandler(DBusConnection *connection, DBusMessage *msg, 
         }
 
         dbus_message_iter_get_basic(&arglist, &pOwnerName);
+
+        if (!isAuthenticatedEventSender(connection, msg, pOwnerName))
+        {
+            log("%s Error event sender does not own claimed IARM name\n", __FUNCTION__);
+            goto ignore;
+        }
 
         if(strncmp(pOwnerName,eventInfo->ownerName,IARM_MAX_NAME_LEN) !=0 )
         {
