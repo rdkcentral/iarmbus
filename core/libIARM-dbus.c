@@ -1207,7 +1207,7 @@ IARM_Result_t IARM_Init(const char *groupName, const char *memberName)
         //strcpy(&busName[13], memberName);
         snprintf(busName, IARM_BUS_NAME_MAX_LEN - 1, "%s%s", "process.iarm.", memberName);
         dbus_error_free(&err);
-        ret = dbus_bus_request_name(cctx->conn, busName, DBUS_NAME_FLAG_REPLACE_EXISTING | DBUS_NAME_FLAG_ALLOW_REPLACEMENT, &err);
+        ret = dbus_bus_request_name(cctx->conn, busName, DBUS_NAME_FLAG_DO_NOT_QUEUE, &err);
 
         if ((dbus_error_is_set(&err)) || (DBUS_REQUEST_NAME_REPLY_PRIMARY_OWNER != ret))
         {
@@ -1226,7 +1226,7 @@ IARM_Result_t IARM_Init(const char *groupName, const char *memberName)
 
         dbus_error_free(&err); 
         snprintf(busName, IARM_BUS_NAME_MAX_LEN - 1, "%s%s%s", "process.iarm.", memberName, ".Event");
-        ret = dbus_bus_request_name(cctx->connEvent, busName, DBUS_NAME_FLAG_REPLACE_EXISTING | DBUS_NAME_FLAG_ALLOW_REPLACEMENT, &err);
+        ret = dbus_bus_request_name(cctx->connEvent, busName, DBUS_NAME_FLAG_DO_NOT_QUEUE, &err);
         if ((dbus_error_is_set(&err)) || (DBUS_REQUEST_NAME_REPLY_PRIMARY_OWNER != ret))
         {
             log("%s Error Request to set the Dbus name on connEvent failed\n", __FUNCTION__);
@@ -1237,7 +1237,7 @@ IARM_Result_t IARM_Init(const char *groupName, const char *memberName)
 
         dbus_error_free(&err); 
         snprintf(busName, IARM_BUS_NAME_MAX_LEN - 1, "%s%s%s", "process.iarm.", memberName, ".Method");
-        ret = dbus_bus_request_name(cctx->connMethodCall, busName, DBUS_NAME_FLAG_REPLACE_EXISTING | DBUS_NAME_FLAG_ALLOW_REPLACEMENT, &err);
+        ret = dbus_bus_request_name(cctx->connMethodCall, busName, DBUS_NAME_FLAG_DO_NOT_QUEUE, &err);
         if ((dbus_error_is_set(&err)) || (DBUS_REQUEST_NAME_REPLY_PRIMARY_OWNER != ret))
         {
             log("%s Error Request to set the Dbus name on connMethodCall failed\n", __FUNCTION__);
