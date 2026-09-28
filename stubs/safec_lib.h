@@ -17,7 +17,6 @@
  * limitations under the License.
 */
 
-#define SAFEC_DUMMY_API 1
 #ifndef SAFEC_DUMMY_API
 #include "safe_str_lib.h"
 #include "safe_mem_lib.h"
@@ -60,6 +59,7 @@
     }
 
 #ifdef SAFEC_DUMMY_API
+#error "SAFEC_DUMMY_API disables required bounds checks and is not supported"
 #include <stdarg.h>
 #include <string.h>
 #include <strings.h>
