@@ -1156,13 +1156,61 @@ static IARM_Result_t RegisterPreChange(IARM_Bus_CallContext_t *callCtx)
 }
 
 
+static dbus_bool_t _IsRegisteredIarmCaller(DBusConnection *connection, DBusMessage *message)
+{
+    DBusError error;
+    const char *sender = dbus_message_get_sender(message);
+    char **names;
+    int index;
+    dbus_bool_t authenticated = FALSE;
+
+    if (connection == NULL || sender == NULL) {
+        return FALSE;
+    }
+    dbus_error_init(&error);
+    names = dbus_bus_list_names(connection, &error);
+    if (dbus_error_is_set(&error) || names == NULL) {
+        dbus_error_free(&error);
+        return FALSE;
+    }
+    for (index = 0; names[index] != NULL && !authenticated; ++index) {
+        char *owner;
+        if (strncmp(names[index], "process.iarm.", 13) != 0 ||
+            strstr(names[index], ".Event") != NULL || strstr(names[index], ".Method") != NULL) {
+            continue;
+        }
+        owner = dbus_bus_get_name_owner(connection, names[index], &error);
+        if (!dbus_error_is_set(&error) && owner != NULL) {
+            authenticated = strcmp(owner, sender) == 0;
+        }
+        if (owner != NULL) {
+            dbus_free(owner);
+        }
+        if (dbus_error_is_set(&error)) {
+            dbus_error_free(&error);
+            dbus_error_init(&error);
+        }
+    }
+    dbus_free_string_array(names);
+    dbus_error_free(&error);
+    return authenticated;
+}
+
 static void _BusCall_FuncWrapper(void *callCtx, unsigned long methodID, void *arg, void *serial)
 {
 	//log("Entering [%s] - callCtx[%p]\r\n", __FUNCTION__, callCtx);
 
 	IARM_Bus_CallContext_t *cctx = (IARM_Bus_CallContext_t *)callCtx;
 	IARM_BusCall_t handler = (IARM_BusCall_t)cctx->handler;
-	IARM_Result_t retCode = handler(arg);
+    DBusConnection *connection = (DBusConnection *)methodID;
+    DBusMessage *message = (DBusMessage *)serial;
+	IARM_Result_t retCode;
+    if (!_IsRegisteredIarmCaller(connection, message)) {
+        retCode = IARM_RESULT_INVALID_STATE;
+    }
+    else {
+        retCode = handler(arg);
+    }
 	//log("Returing [%s] - [%s][%s]\r\n", __FUNCTION__, cctx->ownerName, cctx->methodName);
 
 	IARM_CallReturn(cctx->ownerName, cctx->methodName, arg, retCode, serial);
