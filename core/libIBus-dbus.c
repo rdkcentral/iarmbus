@@ -33,6 +33,7 @@
 #include <search.h>
 
 #include <glib.h>
+#include <dbus/dbus.h>
 
 #include "libIBus.h"
 #include "libIBusDaemon.h"
@@ -1156,42 +1157,68 @@ static IARM_Result_t RegisterPreChange(IARM_Bus_CallContext_t *callCtx)
 }
 
 
-static dbus_bool_t _IsRegisteredIarmCaller(DBusConnection *connection, DBusMessage *message)
+static dbus_bool_t _NameOwnerMatches(DBusConnection *connection, const char *name, const char *sender)
 {
     DBusError error;
-    const char *sender = dbus_message_get_sender(message);
-    char **names;
-    int index;
-    dbus_bool_t authenticated = FALSE;
+    DBusMessage *request;
+    DBusMessage *reply;
+    const char *nameArg = name;
+    const char *owner = NULL;
+    dbus_bool_t matches = FALSE;
 
-    if (connection == NULL || sender == NULL) {
+    request = dbus_message_new_method_call(DBUS_SERVICE_DBUS, DBUS_PATH_DBUS,
+                                           DBUS_INTERFACE_DBUS, "GetNameOwner");
+    if (request == NULL || !dbus_message_append_args(request, DBUS_TYPE_STRING, &nameArg,
+                                                      DBUS_TYPE_INVALID)) {
+        if (request != NULL) dbus_message_unref(request);
         return FALSE;
     }
     dbus_error_init(&error);
-    names = dbus_bus_list_names(connection, &error);
-    if (dbus_error_is_set(&error) || names == NULL) {
+    reply = dbus_connection_send_with_reply_and_block(connection, request, 1000, &error);
+    dbus_message_unref(request);
+    if (reply != NULL && !dbus_error_is_set(&error) &&
+        dbus_message_get_args(reply, &error, DBUS_TYPE_STRING, &owner, DBUS_TYPE_INVALID)) {
+        matches = owner != NULL && strcmp(owner, sender) == 0;
+    }
+    if (reply != NULL) dbus_message_unref(reply);
+    dbus_error_free(&error);
+    return matches;
+}
+
+static dbus_bool_t _IsRegisteredIarmCaller(DBusConnection *connection, DBusMessage *message)
+{
+    DBusError error;
+    DBusMessage *request;
+    DBusMessage *reply;
+    DBusMessageIter arguments;
+    DBusMessageIter names;
+    const char *sender = dbus_message_get_sender(message);
+    dbus_bool_t authenticated = FALSE;
+
+    if (connection == NULL || sender == NULL) return FALSE;
+    request = dbus_message_new_method_call(DBUS_SERVICE_DBUS, DBUS_PATH_DBUS,
+                                           DBUS_INTERFACE_DBUS, "ListNames");
+    if (request == NULL) return FALSE;
+    dbus_error_init(&error);
+    reply = dbus_connection_send_with_reply_and_block(connection, request, 1000, &error);
+    dbus_message_unref(request);
+    if (reply == NULL || dbus_error_is_set(&error) || !dbus_message_iter_init(reply, &arguments) ||
+        dbus_message_iter_get_arg_type(&arguments) != DBUS_TYPE_ARRAY) {
+        if (reply != NULL) dbus_message_unref(reply);
         dbus_error_free(&error);
         return FALSE;
     }
-    for (index = 0; names[index] != NULL && !authenticated; ++index) {
-        char *owner;
-        if (strncmp(names[index], "process.iarm.", 13) != 0 ||
-            strstr(names[index], ".Event") != NULL || strstr(names[index], ".Method") != NULL) {
-            continue;
+    dbus_message_iter_recurse(&arguments, &names);
+    while (dbus_message_iter_get_arg_type(&names) == DBUS_TYPE_STRING && !authenticated) {
+        const char *name = NULL;
+        dbus_message_iter_get_basic(&names, &name);
+        if (name != NULL && strncmp(name, "process.iarm.", 13) == 0 &&
+            strstr(name, ".Event") == NULL && strstr(name, ".Method") == NULL) {
+            authenticated = _NameOwnerMatches(connection, name, sender);
         }
-        owner = dbus_bus_get_name_owner(connection, names[index], &error);
-        if (!dbus_error_is_set(&error) && owner != NULL) {
-            authenticated = strcmp(owner, sender) == 0;
-        }
-        if (owner != NULL) {
-            dbus_free(owner);
-        }
-        if (dbus_error_is_set(&error)) {
-            dbus_error_free(&error);
-            dbus_error_init(&error);
-        }
+        dbus_message_iter_next(&names);
     }
-    dbus_free_string_array(names);
+    dbus_message_unref(reply);
     dbus_error_free(&error);
     return authenticated;
 }
