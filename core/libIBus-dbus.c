@@ -45,6 +45,7 @@
 typedef struct _IARM_Bus_CallContext_t {
 	char ownerName[IARM_MAX_NAME_LEN];
 	char methodName[IARM_MAX_NAME_LEN];
+    size_t minimumArgSize;
 	IARM_BusCall_t handler;
 }IARM_Bus_CallContext_t;
 
@@ -587,6 +588,22 @@ IARM_Result_t IARM_Bus_IsConnected(const char *memberName, int *isRegistered)
  *
  * @return IARM_Result_t Error Code.
  */
+static size_t _MinimumDaemonArgumentSize(const char *methodName)
+{
+    if (strcmp(methodName, IARM_BUS_DAEMON_API_RequestOwnership) == 0) return sizeof(IARM_Bus_Daemon_RequestOwnership_Param_t);
+    if (strcmp(methodName, IARM_BUS_DAEMON_API_ReleaseOwnership) == 0) return sizeof(IARM_Bus_Daemon_ReleaseOwnership_Param_t);
+    if (strcmp(methodName, IARM_BUS_DAEMON_API_RegisterMember) == 0 ||
+        strcmp(methodName, IARM_BUS_DAEMON_API_UnRegisterMember) == 0) return sizeof(IARM_Bus_Member_t);
+    if (strcmp(methodName, IARM_BUS_DAEMON_API_PowerPreChange) == 0 ||
+        strcmp(methodName, IARM_BUS_DAEMON_API_DeepSleepWakeup) == 0) return sizeof(IARM_Bus_Daemon_PowerPreChange_Param_t);
+    if (strcmp(methodName, IARM_BUS_DAEMON_API_CheckRegistration) == 0) return sizeof(IARM_Bus_Daemon_CheckRegistration_Param_t);
+    if (strcmp(methodName, IARM_BUS_DAEMON_API_ResolutionPreChange) == 0 ||
+        strcmp(methodName, IARM_BUS_DAEMON_API_ResolutionPostChange) == 0) return sizeof(IARM_Bus_Daemon_ResolutionChange_Param_t);
+    if (strcmp(methodName, IARM_BUS_DAEMON_API_SysModeChange) == 0) return sizeof(IARM_Bus_Daemon_SysModeChange_Param_t);
+    if (strcmp(methodName, IARM_BUS_DAEMON_API_RegisterPreChange) == 0) return sizeof(IARM_Bus_Daemon_RegisterPreChange_Param_t);
+    return 0;
+}
+
 IARM_Result_t IARM_Bus_RegisterCall(const char *methodName, IARM_BusCall_t handler)
 {
     IARM_Result_t retCode = IARM_RESULT_SUCCESS;
@@ -613,6 +630,8 @@ IARM_Result_t IARM_Bus_RegisterCall(const char *methodName, IARM_BusCall_t handl
 		cctx->ownerName[IARM_MAX_NAME_LEN -1] = '\0';
 		strncpy(cctx->methodName, methodName, IARM_MAX_NAME_LEN -1);
 		cctx->methodName[IARM_MAX_NAME_LEN -1] = '\0';
+        cctx->minimumArgSize = strcmp(m_member->selfName, IARM_BUS_DAEMON_NAME) == 0 ?
+            _MinimumDaemonArgumentSize(methodName) : 0;
 		cctx->handler = handler;
         retCode = IARM_RegisterCall(m_member->selfName, methodName, _BusCall_FuncWrapper, (void *)cctx/*callCtx*/);
         {
@@ -1162,7 +1181,13 @@ static void _BusCall_FuncWrapper(void *callCtx, unsigned long methodID, void *ar
 
 	IARM_Bus_CallContext_t *cctx = (IARM_Bus_CallContext_t *)callCtx;
 	IARM_BusCall_t handler = (IARM_BusCall_t)cctx->handler;
-	IARM_Result_t retCode = handler(arg);
+	IARM_Result_t retCode;
+    if (cctx->minimumArgSize != 0 && methodID < cctx->minimumArgSize) {
+        retCode = IARM_RESULT_INVALID_PARAM;
+    }
+    else {
+        retCode = handler(arg);
+    }
 	//log("Returing [%s] - [%s][%s]\r\n", __FUNCTION__, cctx->ownerName, cctx->methodName);
 
 	IARM_CallReturn(cctx->ownerName, cctx->methodName, arg, retCode, serial);
