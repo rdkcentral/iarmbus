@@ -108,10 +108,18 @@ IARM_Result_t IARM_Bus_DaemonStop(void)
     return IARM_RESULT_SUCCESS;
 }
 
+static bool _IsValidFixedName(const char *name)
+{
+    return name != NULL && name[0] != '\0' && memchr(name, '\0', IARM_MAX_NAME_LEN) != NULL;
+}
+
 static IARM_Bus_Member_t * _findRegisteredMember(char *name)
 {
     IARM_Bus_Member_t *registeredMember = NULL;
 	GList *l = NULL;
+    if (!_IsValidFixedName(name)) {
+        return NULL;
+    }
 	for (l = m_registeredList; l != NULL; l = l->next)
 	{
 		registeredMember = container_of((GList *)l->data, IARM_Bus_Member_t, link);
@@ -152,7 +160,7 @@ static IARM_Result_t _RegisterMember(void *arg)
     }
 
     //log("Entering [%s] - [%s]\r\n", __FUNCTION__, member->selfName);
-    if (strlen(member->selfName) == 0) {
+    if (!_IsValidFixedName(member->selfName)) {
 	    log("_RegisterMember: member->selfName is NONE, returning INVALID_PARAM.\r\n");
 	    free(member);
 	    return IARM_RESULT_INVALID_PARAM;
@@ -173,6 +181,9 @@ static IARM_Result_t _UnRegisterMember(void *arg)
 {
     IARM_Result_t retCode = IARM_RESULT_SUCCESS;
     IARM_Bus_Member_t *member = (IARM_Bus_Member_t *)arg;
+    if (member == NULL || !_IsValidFixedName(member->selfName)) {
+        return IARM_RESULT_INVALID_PARAM;
+    }
     IARM_Bus_Member_t *registeredMember = _findRegisteredMember(member->selfName);
 
     /*log("Entering [%s] - [%s]\r\n", __FUNCTION__, member->selfName);*/
@@ -201,8 +212,11 @@ static IARM_Result_t _UnRegisterMember(void *arg)
 static IARM_Result_t _CheckRegistration(void *arg)
 {
     IARM_Result_t retCode = IARM_RESULT_SUCCESS;
-    IARM_Bus_Daemon_CheckRegistration_Param_t *pParam = (IARM_Bus_Daemon_CheckRegistration_Param_t*) arg; 
-   
+    IARM_Bus_Daemon_CheckRegistration_Param_t *pParam = (IARM_Bus_Daemon_CheckRegistration_Param_t*) arg;
+    if (pParam == NULL || !_IsValidFixedName(pParam->memberName)) {
+        return IARM_RESULT_INVALID_PARAM;
+    }
+
     pParam->isRegistered = _IsRegistered(pParam->memberName) ? 1 : 0;
   
     return retCode;
@@ -212,6 +226,9 @@ static bool _IsRegistered(const char *memberName)
 {
     IARM_Bus_Member_t *registeredMember = NULL;
 	GList *l = NULL;
+    if (!_IsValidFixedName(memberName)) {
+        return false;
+    }
 	for (l = m_registeredList; l != NULL; l = l->next)
 	{
 		registeredMember = container_of((GList *)l->data, IARM_Bus_Member_t, link);
@@ -240,6 +257,10 @@ static IARM_Result_t _RequestOwnership(void *arg)
         return IARM_RESULT_INVALID_PARAM;
     }
     IARM_Bus_Member_t *registeredMember = _findRegisteredMember(reqIn->requestor.selfName);
+    if (registeredMember == NULL) {
+        reqIn->rpcResult = IARM_RESULT_INVALID_PARAM;
+        return IARM_RESULT_INVALID_PARAM;
+    }
 
     if (IS_RESOURCETYPE_VALID(reqIn->resrcType)) {
         IARM_Result_t rpcRet = IARM_RESULT_SUCCESS;
@@ -291,6 +312,10 @@ static IARM_Result_t _ReleaseOwnership(void *arg)
     }
 
     IARM_Bus_Member_t *registeredMember = _findRegisteredMember(reqIn->requestor.selfName);
+    if (registeredMember == NULL) {
+        reqIn->rpcResult = IARM_RESULT_INVALID_PARAM;
+        return IARM_RESULT_INVALID_PARAM;
+    }
 
     if (IS_RESOURCETYPE_VALID(reqIn->resrcType)) {
         /* make sure requestor does already have focus */
@@ -483,9 +508,14 @@ static IARM_Result_t _RegisterPreChange(void *arg)
 {
     IARM_Result_t retCode = IARM_RESULT_SUCCESS;
     IARM_Bus_Daemon_RegisterPreChange_Param_t *PreChangeMember = (IARM_Bus_Daemon_RegisterPreChange_Param_t *)arg;
-    unsigned int size = (sizeof(char)*2*IARM_MAX_NAME_LEN); 
-    char* compId = (char*)malloc(size);
-    
+    unsigned int size = (sizeof(char)*2*IARM_MAX_NAME_LEN);
+    char* compId;
+    if (PreChangeMember == NULL || !_IsValidFixedName(PreChangeMember->ownerName) ||
+        !_IsValidFixedName(PreChangeMember->methodName)) {
+        return IARM_RESULT_INVALID_PARAM;
+    }
+    compId = (char*)malloc(size);
+
     if (NULL != compId)
     {
         snprintf(compId,size,"%s_%s", PreChangeMember->ownerName,PreChangeMember->methodName);
