@@ -360,7 +360,7 @@ DBusHandlerResult dbusCallHandler(DBusConnection *connection, DBusMessage *msg, 
             printf("IARM: callInfo or handler is NULL in dbusCallHandler\n");
             return DBUS_HANDLER_RESULT_HANDLED;
         }
-        callInfo->handler(callInfo->callCtx, 0, (void *)callArg, (void *)msg);
+        callInfo->handler(callInfo->callCtx, (unsigned long)connection, (void *)callArg, (void *)msg);
         return DBUS_HANDLER_RESULT_HANDLED;   
         }
     else if (!dbus_message_has_interface(msg, "iarm.method.Type"))
