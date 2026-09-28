@@ -30,6 +30,7 @@
 #include <exception>
 #include <sys/prctl.h>
 #include "iarmUtil.h"
+#include "iarmReplyValidation.h"
 
 #include "safec_lib.h"
 
@@ -516,6 +517,8 @@ IARM_Result_t IARM_CallWithTimeout(const char *ownerName,  const char *funcName,
     DBusMessage *replyMsg;
     DBusError error;
     uint32_t size;
+    uint32_t argCapacity;
+    int replySize;
     unsigned char *byteIndex = (unsigned char *)arg, *returnArg;
 
     if (!IARM_GrpCtx_IsValid(cctx) || ownerName == NULL || funcName == NULL)
@@ -550,8 +553,8 @@ IARM_Result_t IARM_CallWithTimeout(const char *ownerName,  const char *funcName,
         /* append arguments onto signal */
         dbus_message_iter_init_append(msg, &arglist);
 
-        size = (uint32_t) IARM_GetSize(arg);
-        size += _IARM_MEM_EXTRA_ALLOC_SIZE; /* include prefix */
+        argCapacity = (uint32_t) IARM_GetSize(arg);
+        size = argCapacity + _IARM_MEM_EXTRA_ALLOC_SIZE; /* include prefix */
         byteIndex -= _IARM_MEM_EXTRA_ALLOC_SIZE;
 
         if (!dbus_message_iter_append_basic(&arglist, DBUS_TYPE_UINT32 , &size))
@@ -632,19 +635,19 @@ IARM_Result_t IARM_CallWithTimeout(const char *ownerName,  const char *funcName,
         
         if (dbus_message_iter_get_arg_type(&arglist) != DBUS_TYPE_ARRAY ||
             dbus_message_iter_get_element_type(&arglist) != DBUS_TYPE_BYTE)
-        {   
-            log("%s Error Reply argument is malformed\n", __FUNCTION__); 
+        {
+            log("%s Error Reply argument is malformed\n", __FUNCTION__);
+            dbus_message_unref(replyMsg);
+            return IARM_RESULT_INVALID_PARAM;
         }
 
-        size -= _IARM_MEM_EXTRA_ALLOC_SIZE; /* doesn't include prefix this time */
-
         dbus_message_iter_recurse(&arglist, &arraylist);
-        dbus_message_iter_get_fixed_array(&arraylist, (void *)&returnArg, (int *)&size);
-        
-	rc = memcpy_s(arg, size, returnArg, size);
-        if(rc!=EOK)
+        dbus_message_iter_get_fixed_array(&arraylist, (void *)&returnArg, &replySize);
+        if (!IARM_CopyValidatedReply(arg, argCapacity, returnArg, replySize))
         {
-                ERR_CHK(rc);
+            log("%s Error Reply argument exceeds destination capacity\n", __FUNCTION__);
+            dbus_message_unref(replyMsg);
+            return IARM_RESULT_INVALID_PARAM;
         }
 
 	returnArg = (unsigned char *) arg;
