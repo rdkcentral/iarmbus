@@ -310,13 +310,13 @@ IARM_Result_t IARM_Bus_Call(const char *ownerName,  const char *methodName, void
  * or IARM_Bus_BroadcastEvent() issued by this thread.
  *
  * The caller obtains its own current span context from its own tracing library
- * (e.g. rdk_otlp_get_current_traceparent()) and passes the resulting string here.
+ * (its current-traceparent accessor) and passes the resulting string here.
  * IARM treats the value as an opaque, format-validated string - it has no
  * dependency on any tracing library. The value is consumed (and cleared) by the
  * very next IARM_Bus_Call()/IARM_Bus_BroadcastEvent() on this thread; it does not
  * persist across calls.
  *
- * No-op if libIARMBus was not built with OTEL_ENABLED (--enable-otel-tp).
+ * No-op if libIARMBus was not built with TP_ENABLED (--enable-tp).
  *
  * @param[in] traceparent W3C traceparent string ("00-<32hex>-<16hex>-<2hex>"), or
  * NULL to clear a previously set value without sending it.
@@ -329,10 +329,10 @@ void IARM_Bus_SetTraceparent(const char *traceparent);
  *
  * Valid only while inside a handler invoked as a result of a sender call that
  * used IARM_Bus_SetTraceparent(). The receiver passes the returned string to its
- * own tracing library (e.g. rdk_otlp_start_child_from_traceparent()) to create a
+ * own tracing library (its start-child-span-from-traceparent API) to create a
  * child span. IARM itself never calls into a tracing library.
  *
- * Always returns NULL if libIARMBus was not built with OTEL_ENABLED (--enable-otel-tp).
+ * Always returns NULL if libIARMBus was not built with TP_ENABLED (--enable-tp).
  *
  * @return Pointer to a 55-char W3C traceparent string, or NULL if none was propagated.
  */
