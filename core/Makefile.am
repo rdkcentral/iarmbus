@@ -33,15 +33,17 @@ CC = $(CXX)
 
 AM_CPPFLAGS = $(INCLUDE_FILES)
 
-if OTEL_ENABLED
-OTEL_CFLAGS = -DOTEL_ENABLED
+if TP_ENABLED
+TP_CFLAGS = -DTP_ENABLED
 else
-OTEL_CFLAGS =
+TP_CFLAGS =
 endif
 
+# Tracing context propagation (TP_ENABLED) is implemented only in the D-Bus
+# sources below; the legacy native/FusionDale backend does not support it.
 lib_LTLIBRARIES = libIARMBus.la
 libIARMBus_la_SOURCES = libIARM-dbus.c libIBus-dbus.c libIBusDaemon-dbus.c
-libIARMBus_la_CFLAGS = -D_USE_DBUS $(INCLUDE_FILES) $(OTEL_CFLAGS)
+libIARMBus_la_CFLAGS = -D_USE_DBUS $(INCLUDE_FILES) $(TP_CFLAGS)
 
 libIARMBus_la_LDFLAGS = $(SOLIBLDFLAGS)
 
