@@ -312,7 +312,7 @@ IARM_Result_t IARM_RegisterEvent(const char *ownerName,  IARM_EventId_t eventId)
  */
 IARM_Result_t IARM_NotifyEvent(const char *ownerName,  IARM_EventId_t eventId, void *arg);
 
-#ifdef OTEL_ENABLED
+#ifdef TP_ENABLED
 void IARM_Bus_SetIncomingPayloadSize(size_t size);
 #endif
 
