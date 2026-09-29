@@ -72,7 +72,7 @@ static IARM_Result_t Register(void);
 static IARM_Result_t UnRegister(void);
 static IARM_Result_t RegisterPreChange(IARM_Bus_CallContext_t *callCtx);
 
-#ifdef OTEL_ENABLED
+#ifdef TP_ENABLED
 /* Outgoing traceparent set by the caller for the next IARM_Bus_Call()/
  * IARM_Bus_BroadcastEvent() on this thread; consumed (and cleared) by that call. */
 static __thread char s_iarm_outgoing_tp[IARM_TP_LEN + 1];
@@ -140,7 +140,7 @@ const char *IARM_Bus_GetTraceparent(void)
 {
     return NULL;
 }
-#endif /* OTEL_ENABLED */
+#endif /* TP_ENABLED */
 
 static void _BusCall_FuncWrapper(void *callCtx, unsigned long methodID, void *arg, void *serial);
 static void _EventHandler_FuncWrapper (void *ctx, void *arg);
@@ -368,7 +368,7 @@ IARM_Result_t IARM_Bus_BroadcastEvent(const char *ownerName, IARM_EventId_t even
     }
 	else {
         IARM_EventData_t *eventData = NULL;
-#ifdef OTEL_ENABLED
+#ifdef TP_ENABLED
         char pending_tp[IARM_TP_LEN + 1];
         int has_tp = iarm_tp_take_outgoing(pending_tp);
     size_t allocLen = sizeof(IARM_EventData_t) + len + IARM_TP_SUFFIX_SIZE;
@@ -387,7 +387,7 @@ IARM_Result_t IARM_Bus_BroadcastEvent(const char *ownerName, IARM_EventId_t even
 			ERR_CHK(rc);
 		}
 
-#ifdef OTEL_ENABLED
+#ifdef TP_ENABLED
         {
             unsigned char *suffix = (unsigned char *)&eventData->data + len;
             memset(suffix, 0, IARM_TP_SUFFIX_SIZE);
@@ -792,7 +792,7 @@ IARM_Result_t IARM_Bus_Call(const char *ownerName,  const char *methodName, void
     void *argOut = NULL;
     void *payload = arg;
     size_t payloadLen = argLen;
-#ifdef OTEL_ENABLED
+#ifdef TP_ENABLED
     IARM_RPC_TP_Envelope_t *env = NULL;
     char pending_tp[IARM_TP_LEN + 1];
 #endif
@@ -802,7 +802,7 @@ IARM_Result_t IARM_Bus_Call(const char *ownerName,  const char *methodName, void
     IBUS_Lock(lock);
 
     if (m_initialized && m_connected) {
-#ifdef OTEL_ENABLED
+#ifdef TP_ENABLED
         if (arg != NULL && argLen > 0 && iarm_tp_take_outgoing(pending_tp)) {
             payloadLen = sizeof(IARM_RPC_TP_Envelope_t) + argLen;
             env = (IARM_RPC_TP_Envelope_t *)malloc(payloadLen);
@@ -838,7 +838,7 @@ IARM_Result_t IARM_Bus_Call(const char *ownerName,  const char *methodName, void
             retCode = IARM_Call(ownerName, methodName, argOut, (int *)&retVal);
             if ((retCode == IARM_RESULT_SUCCESS) && (argOut != NULL))
             {
-#ifdef OTEL_ENABLED
+#ifdef TP_ENABLED
                 if (env != NULL) {
                     memcpy(arg, ((IARM_RPC_TP_Envelope_t *)argOut)->inner_arg, argLen);
                 } else
@@ -866,7 +866,7 @@ IARM_Result_t IARM_Bus_Call(const char *ownerName,  const char *methodName, void
         else
             log("%s failed to allocated memory for the method invocation %s with retCode %d \n", __FUNCTION__, methodName, retCode);
 
-#ifdef OTEL_ENABLED
+#ifdef TP_ENABLED
         free(env);
 #endif
     }
@@ -1286,7 +1286,7 @@ static void _BusCall_FuncWrapper(void *callCtx, unsigned long methodID, void *ar
 	IARM_BusCall_t handler = (IARM_BusCall_t)cctx->handler;
 
     void *handler_arg = arg;
-#ifdef OTEL_ENABLED
+#ifdef TP_ENABLED
     iarm_tp_clear_incoming();
     if (arg) {
         IARM_RPC_TP_Envelope_t *env = (IARM_RPC_TP_Envelope_t *)arg;
@@ -1302,11 +1302,11 @@ static void _BusCall_FuncWrapper(void *callCtx, unsigned long methodID, void *ar
 #endif
 
     IARM_Result_t retCode = handler(handler_arg);
-#ifdef OTEL_ENABLED
+#ifdef TP_ENABLED
     iarm_tp_clear_incoming();
 #endif
 
-#ifdef OTEL_ENABLED
+#ifdef TP_ENABLED
     s_iarm_incoming_payload_size = 0;
 #endif
 	//log("Returing [%s] - [%s][%s]\r\n", __FUNCTION__, cctx->ownerName, cctx->methodName);
@@ -1340,7 +1340,7 @@ static void _EventHandler_FuncWrapper (void *ctx, void *arg)
 		{
                     //log("Event Handler [%s]for Event [%d] will be  invoked\r\n", eventData->owner, eventData->id);
                     if (cctx->handler != NULL) {
-#ifdef OTEL_ENABLED
+#ifdef TP_ENABLED
                         size_t event_size = s_iarm_incoming_payload_size;
                         iarm_tp_clear_incoming();
                         if (event_size >= sizeof(IARM_EventData_t) + eventData->len + IARM_TP_SUFFIX_SIZE) {
@@ -1352,11 +1352,11 @@ static void _EventHandler_FuncWrapper (void *ctx, void *arg)
                         }
 #endif
                         cctx->handler(eventData->owner, eventData->id, (void *)&eventData->data, eventData->len);
-#ifdef OTEL_ENABLED
+#ifdef TP_ENABLED
                         iarm_tp_clear_incoming();
 #endif
 
-#ifdef OTEL_ENABLED
+#ifdef TP_ENABLED
                         s_iarm_incoming_payload_size = 0;
 #endif
                     }
