@@ -47,12 +47,12 @@ PKG_CHECK_MODULES([DBUS], [dbus-1])
 
 AC_CHECK_LIB(gthread-2.0, g_thread_init)
 
-# --enable-otel-tp: compiles in IARM_Bus_SetTraceparent()/IARM_Bus_GetTraceparent()
+# --enable-tp: compiles in IARM_Bus_SetTraceparent()/IARM_Bus_GetTraceparent()
 # transport support. Off by default; Yocto recipes pass this via EXTRA_OECONF.
-AC_ARG_ENABLE([otel-tp],
-    [AS_HELP_STRING([--enable-otel-tp], [Enable IARM traceparent set/get pass-through APIs])],
-    [enable_otel_tp=$enableval], [enable_otel_tp=no])
-AM_CONDITIONAL([OTEL_ENABLED], [test "x$enable_otel_tp" = "xyes"])
+AC_ARG_ENABLE([tp],
+    [AS_HELP_STRING([--enable-tp], [Enable IARM traceparent set/get pass-through APIs])],
+    [enable_tp=$enableval], [enable_tp=no])
+AM_CONDITIONAL([TP_ENABLED], [test "x$enable_tp" = "xyes"])
 
 # Checks for typedefs, structures, and compiler characteristics.
 AC_TYPE_PID_T
