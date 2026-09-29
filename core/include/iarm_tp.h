@@ -1,7 +1,7 @@
 /**
  * IARM-Bus traceparent transport helpers.
  *
- * IARM has no dependency on any tracing/OTel library here. A traceparent is
+ * IARM has no dependency on any tracing library here. A traceparent is
  * just an opaque, validated W3C-format string that the caller supplies via
  * IARM_Bus_SetTraceparent() and the receiver reads back via
  * IARM_Bus_GetTraceparent(). IARM only stores, transports and validates the
@@ -11,7 +11,7 @@
 #ifndef IARM_TP_H
 #define IARM_TP_H
 
-#ifdef OTEL_ENABLED
+#ifdef TP_ENABLED
 
 #include <stdint.h>
 #include <stddef.h>
@@ -75,6 +75,6 @@ static inline int iarm_tp_valid(const char *tp)
 }
 #endif
 
-#endif /* OTEL_ENABLED */
+#endif /* TP_ENABLED */
 
 #endif /* IARM_TP_H */
