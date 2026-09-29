@@ -368,3 +368,52 @@ The following D-Bus library and system functions are called directly by the IARM
 | `RDK_LOGGER_ENABLED` | Compile-time flag | Platform-dependent                                 | When defined, routes diagnostic output through the RDK logger (`LOG.RDK.IARMBUS`) instead of `printf`.                                                                                                 |
 | `SAFEC_DUMMY_API`    | Compile-time flag | Set when `safec` is omitted from `DISTRO_FEATURES` | Activates stub implementations of safe-C string and memory functions, substituting standard library equivalents on platforms that build without the `safec` library.                                   |
 | `PID_FILE_PATH`      | Compile-time path | Not set by default                                 | When defined, the daemon writes a PID file at `<PID_FILE_PATH>/iarmbusd.pid` after startup, providing a readiness indicator for container environments that rely on PID files rather than `sd_notify`. |
+| `TP_ENABLED`         | Compile-time flag | Disabled by default                                | Enabled by passing `--enable-tp` to `configure` (e.g. via `EXTRA_OECONF` in the Yocto recipe). Compiles in the tracing-context pass-through APIs (`IARM_Bus_SetTraceparent()` / `IARM_Bus_GetTraceparent()`) described below. When not enabled, both APIs still exist but are no-ops. |
+
+---
+
+## Tracing Context Propagation (Traceparent Pass-Through)
+
+IARM Bus can optionally carry a caller-supplied *traceparent* string alongside an RPC call or event broadcast so the receiving process can continue the same distributed trace. IARM does not depend on, link against, or call into any tracing library to do this — it only stores, transports, and format-validates an opaque string supplied by the application. The application layer is entirely responsible for obtaining the traceparent from its own tracing library on the sender side, and for starting a child span from it on the receiver side.
+
+This feature is compiled in only when `libIARMBus` is built with `--enable-tp` (`TP_ENABLED`). When the flag is not set, `IARM_Bus_SetTraceparent()` is a no-op and `IARM_Bus_GetTraceparent()` always returns `NULL`, so existing callers are unaffected either way.
+
+Tracing context propagation is implemented only in the D-Bus backend (`libIBus-dbus.c`, `libIARM-dbus.c`), which is what the shipped `libIARMBus` is built from (see `_USE_DBUS` above). The legacy native/FusionDale backend (`libIBus.c`, `libIARM.c`) is not part of the current build and does not declare or implement `IARM_Bus_SetTraceparent()` / `IARM_Bus_GetTraceparent()` at all.
+
+**API surface** (declared in `libIBus.h`, implemented in `libIBus-dbus.c`):
+
+- `IARM_Bus_SetTraceparent(const char *traceparent)` — called by the sender, immediately before `IARM_Bus_Call()` or `IARM_Bus_BroadcastEvent()`, to hand IARM the current W3C traceparent string (`"00-<32hex>-<16hex>-<2hex>"`). The value is stored in thread-local storage and consumed (cleared) by the very next call on that thread — it does not persist across calls.
+- `IARM_Bus_GetTraceparent(void)` — called by the receiver, from inside its RPC handler or event callback, to read the traceparent propagated by the sender for the call/event currently being processed. Returns `NULL` if none was propagated.
+
+**Transport mechanics:**
+
+- **RPC path**: when a traceparent is pending, `IARM_Bus_Call()` wraps the caller's argument in an internal `IARM_RPC_TP_Envelope_t` (magic + traceparent + original argument) before handing it to the D-Bus transport. `_BusCall_FuncWrapper` on the receiving side validates the envelope's magic, length, and traceparent format against the actual received payload size before unwrapping it, then invokes the registered handler with the original argument only — the handler never sees the envelope.
+- **Event path**: when a traceparent is pending, `IARM_Bus_BroadcastEvent()` allocates extra trailer bytes after the event payload (magic byte + traceparent + NUL) without changing `eventData->len`, so legacy/non-participating receivers reading only `data[0..len-1]` are unaffected. `_EventHandler_FuncWrapper` checks the actual received allocation size before reading the trailer, then exposes the traceparent via `IARM_Bus_GetTraceparent()` for the duration of the event callback.
+
+```mermaid
+sequenceDiagram
+    participant SenderApp as Sender Process
+    participant SenderTracer as Sender's Tracing Library
+    participant Bus as libIARMBus
+    participant ReceiverApp as Receiver Process
+    participant ReceiverTracer as Receiver's Tracing Library
+
+    SenderApp->>SenderTracer: get current traceparent
+    SenderTracer-->>SenderApp: "00-traceId-spanId-flags"
+    SenderApp->>Bus: IARM_Bus_SetTraceparent(traceparent)
+    SenderApp->>Bus: IARM_Bus_Call(...) / IARM_Bus_BroadcastEvent(...)
+    Bus->>Bus: wrap arg in envelope / append event trailer
+    Bus->>ReceiverApp: deliver RPC call or event (D-Bus)
+    ReceiverApp->>Bus: (inside handler) IARM_Bus_GetTraceparent()
+    Bus-->>ReceiverApp: "00-traceId-spanId-flags" or NULL
+    ReceiverApp->>ReceiverTracer: start child span from traceparent
+    ReceiverTracer-->>ReceiverApp: child span active
+    ReceiverApp-->>Bus: handler returns
+    Bus-->>SenderApp: IARM_RESULT_SUCCESS
+```
+
+**Compatibility notes:**
+
+- Both ends of a call must be built with `--enable-tp` for propagation to work; if only the sender enables it, the receiver either ignores the extra event trailer bytes (event path, safe) or — for the RPC path — must also be `TP_ENABLED` to correctly unwrap the envelope.
+- `IARM_Bus_Call_with_IPCTimeout()` does not currently participate in traceparent propagation; a value set via `IARM_Bus_SetTraceparent()` before calling it remains pending for the next regular `IARM_Bus_Call()` / `IARM_Bus_BroadcastEvent()`.
+- Traceparent validation (`iarm_tp_valid()` in `iarm_tp.h`) checks length, the `"00-"` version prefix, and delimiter positions before a value is stored or transported; malformed values are rejected and treated as if no traceparent was set.

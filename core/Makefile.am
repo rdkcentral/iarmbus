@@ -33,9 +33,15 @@ CC = $(CXX)
 
 AM_CPPFLAGS = $(INCLUDE_FILES)
 
+if TP_ENABLED
+TP_CFLAGS = -DTP_ENABLED
+else
+TP_CFLAGS =
+endif
+
 lib_LTLIBRARIES = libIARMBus.la
 libIARMBus_la_SOURCES = libIARM-dbus.c libIBus-dbus.c libIBusDaemon-dbus.c
-libIARMBus_la_CFLAGS = -D_USE_DBUS $(INCLUDE_FILES)
+libIARMBus_la_CFLAGS = -D_USE_DBUS $(INCLUDE_FILES) $(TP_CFLAGS)
 
 libIARMBus_la_LDFLAGS = $(SOLIBLDFLAGS)
 
