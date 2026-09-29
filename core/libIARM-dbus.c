@@ -320,7 +320,7 @@ DBusHandlerResult dbusCallHandler(DBusConnection *connection, DBusMessage *msg, 
                     
         dbus_message_iter_recurse(&arglist, &arraylist);
         dbus_message_iter_get_fixed_array(&arraylist, &eventArg, &size);
-    #ifdef OTEL_ENABLED
+    #ifdef TP_ENABLED
         IARM_Bus_SetIncomingPayloadSize((size_t)size);
     #endif
         eventInfo->listener(eventInfo->callCtx, eventArg);
@@ -358,7 +358,7 @@ DBusHandlerResult dbusCallHandler(DBusConnection *connection, DBusMessage *msg, 
         dbus_message_iter_recurse(&arglist, &arraylist);
         dbus_message_iter_get_fixed_array(&arraylist, (void *)&callArg, &size);
         callArg += _IARM_MEM_EXTRA_ALLOC_SIZE;
-    #ifdef OTEL_ENABLED
+    #ifdef TP_ENABLED
         IARM_Bus_SetIncomingPayloadSize(
             (size >= _IARM_MEM_EXTRA_ALLOC_SIZE) ?
             (size_t)size - _IARM_MEM_EXTRA_ALLOC_SIZE : 0);
