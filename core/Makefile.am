@@ -39,8 +39,6 @@ else
 TP_CFLAGS =
 endif
 
-# Tracing context propagation (TP_ENABLED) is implemented only in the D-Bus
-# sources below; the legacy native/FusionDale backend does not support it.
 lib_LTLIBRARIES = libIARMBus.la
 libIARMBus_la_SOURCES = libIARM-dbus.c libIBus-dbus.c libIBusDaemon-dbus.c
 libIARMBus_la_CFLAGS = -D_USE_DBUS $(INCLUDE_FILES) $(TP_CFLAGS)
