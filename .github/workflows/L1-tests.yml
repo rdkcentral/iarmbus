@@ -1,0 +1,32 @@
+name: L1-tests
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  L1-tests:
+    name: Build and run DBus unit tests
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake pkg-config libglib2.0-dev libdbus-1-dev libgtest-dev
+
+      - name: Configure
+        run: cmake -S unit_tests/L1Tests -B build/l1 -DCMAKE_BUILD_TYPE=Debug
+
+      - name: Build
+        run: cmake --build build/l1 --parallel
+
+      - name: Run L1 tests
+        run: ctest --test-dir build/l1 --output-on-failure
