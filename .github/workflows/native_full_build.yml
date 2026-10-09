@@ -6,9 +6,14 @@ on:
   pull_request:
     branches: [ main, 'sprint/**', 'release/**', topic/RDK*, feature/RDK*, develop ]
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.head.sha || github.sha }}
+  cancel-in-progress: true
+
 jobs:
   build-entservices-on-pr:
     name: Build iarmbus component in github rdkcentral
+    if: github.event_name != 'push' || github.repository_owner == 'rdkcentral'
     runs-on: ubuntu-latest
     container:
       image: ghcr.io/rdkcentral/docker-rdk-ci:latest

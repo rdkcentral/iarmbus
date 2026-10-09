@@ -10,9 +10,16 @@ on:
 permissions:
   contents: read
 
+# A commit pushed to develop/main with an open PR fires both push and pull_request; keep one run.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.head.sha || github.sha }}
+  cancel-in-progress: true
+
 jobs:
   L1-tests:
     name: Build and run DBus unit tests
+    # Forks' own push runs would otherwise show up as duplicate checks on upstream PRs.
+    if: github.event_name != 'push' || github.repository_owner == 'rdkcentral'
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
@@ -31,7 +38,7 @@ jobs:
       - name: Run L1 tests
         run: |
           lcov --zerocounters --directory build/l1
-          ctest --test-dir build/l1 --output-on-failure --verbose --output-junit L1TestResults.xml
+          ctest --test-dir build/l1 --output-on-failure --output-junit L1TestResults.xml
 
       - name: Generate coverage
         if: always()

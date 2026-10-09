@@ -128,6 +128,8 @@ void StopIarmDaemon(int signal)
 void StartIarmDaemon(const std::vector<std::string> &args)
 {
     const std::string logPath = g_workDir + "/iarmbusd.log";
+    // Remove before forking so readiness polling can never see a previous daemon's log.
+    std::remove(logPath.c_str());
     fflush(nullptr);
     g_iarmDaemonPid = fork();
     ASSERT_GE(g_iarmDaemonPid, 0);
