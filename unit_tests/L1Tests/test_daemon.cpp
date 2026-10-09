@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 
+#include "libIARM.h"
+#include "libIBus.h"
 #include "libIBusDaemon.h"
 
 extern IARM_Result_t IARM_Bus_DaemonStart(int argc, char *argv[]);
