@@ -38,3 +38,14 @@ target_link_options(run_L1Tests PRIVATE
     -Wl,--wrap=IARM_Bus_RegisterEvent -Wl,--wrap=IARM_Bus_RegisterCall)
 
 gtest_discover_tests(run_L1Tests)
+
+# Runs the real libIARM/libIBus DBus paths against a private dbus-daemon and IARM daemon child.
+add_executable(run_L1DbusTests
+    dbus/dbus_test_env.cpp dbus/test_rpc.cpp dbus/test_events.cpp
+    dbus/test_daemon_rpc.cpp dbus/test_lifecycle.cpp)
+target_compile_features(run_L1DbusTests PRIVATE cxx_std_14)
+target_compile_definitions(run_L1DbusTests PRIVATE TP_ENABLED)
+target_include_directories(run_L1DbusTests PRIVATE ../../core ../../core/include dbus)
+target_link_libraries(run_L1DbusTests PRIVATE iarmbus_under_test GTest::gtest_main)
+
+gtest_discover_tests(run_L1DbusTests TEST_PREFIX "dbus." PROPERTIES TIMEOUT 60)
