@@ -7,7 +7,10 @@
 #include <unistd.h>
 
 #include "iarmUtil.h"
+#include "libIARMCore.h"
 #include "libIBusDaemon.h"
+
+void *IARM_GetContext(void);
 
 namespace {
 
@@ -95,4 +98,19 @@ TEST(IarmBusLifecycle, WritePIDFileRecordsCurrentProcess)
 
     // Unwritable location exercises the error path without crashing.
     IARM_Bus_WritePIDFile("/nonexistent-iarm-dir/l1.pid");
+    // Opens fine but every write fails with ENOSPC.
+    IARM_Bus_WritePIDFile("/dev/full");
+}
+
+TEST(IarmCoreLifecycle, DirectCoreCallsValidateState)
+{
+    EXPECT_EQ(nullptr, IARM_GetContext());
+    EXPECT_EQ(IARM_RESULT_INVALID_PARAM, IARM_Term());
+    EXPECT_EQ(IARM_RESULT_INVALID_PARAM, IARM_Init(nullptr, kClientName));
+    EXPECT_EQ(IARM_RESULT_INVALID_PARAM, IARM_Init(IARM_BUS_NAME, nullptr));
+
+    ASSERT_EQ(IARM_RESULT_SUCCESS, IARM_Bus_Init(kClientName));
+    EXPECT_NE(nullptr, IARM_GetContext());
+    EXPECT_EQ(IARM_RESULT_SUCCESS, IARM_Bus_Term());
+    EXPECT_EQ(nullptr, IARM_GetContext());
 }

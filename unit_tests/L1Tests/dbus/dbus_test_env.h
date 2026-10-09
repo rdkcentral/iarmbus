@@ -2,9 +2,15 @@
 
 #include <gtest/gtest.h>
 
+#include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <csignal>
 #include <mutex>
+#include <thread>
+#include <vector>
+
+#include <dbus/dbus.h>
 #include <string>
 
 #include "libIARM.h"
@@ -14,6 +20,26 @@ constexpr const char *kClientName = "L1Client";
 
 // Scratch directory owned by the private dbus-daemon started for this process.
 const std::string &DbusTestWorkDir();
+
+// Control the instrumented iarmbusd; StartIarmDaemon uses gtest assertions.
+void StopIarmDaemon(int signal = SIGTERM);
+void StartIarmDaemon(const std::vector<std::string> &args = {"--debugconfig", "/dev/null"});
+
+// A bare libdbus connection that owns process.iarm.<name> and answers IARM
+// method calls from its own thread, used to fake peers and malformed replies.
+class RawDbusPeer {
+public:
+    explicit RawDbusPeer(const std::string &name);
+    ~RawDbusPeer();
+    bool OwnsName() const { return owned_; }
+
+private:
+    void Run();
+    DBusConnection *conn_ = nullptr;
+    bool owned_ = false;
+    std::atomic<bool> stop_{false};
+    std::thread thread_;
+};
 
 // Counts callbacks delivered on IARM's dispatch thread so tests can wait for them.
 class CallbackLatch {

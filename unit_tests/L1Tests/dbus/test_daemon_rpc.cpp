@@ -111,6 +111,14 @@ TEST_F(IarmBusDaemonTest, MemberRegistrationLifecycle)
     EXPECT_EQ(IARM_RESULT_IPCCORE_FAIL, IARM_Bus_IsConnected(kGhostName, &registered));
 }
 
+TEST_F(IarmBusDaemonTest, DisconnectAfterDaemonForgotMember)
+{
+    IARM_Bus_Member_t self = MakeMember(kClientName);
+    ASSERT_EQ(IARM_RESULT_SUCCESS, CallDaemon(IARM_BUS_DAEMON_API_UnRegisterMember, &self, sizeof(self)));
+    // Disconnect still succeeds; the daemon's refusal is only logged.
+    EXPECT_EQ(IARM_RESULT_SUCCESS, IARM_Bus_Disconnect());
+}
+
 TEST_F(IarmBusDaemonTest, OwnershipCanBeRequestedAndReleased)
 {
     CallbackLatch latch;

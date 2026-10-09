@@ -3,6 +3,8 @@
 #include <cstring>
 #include <string>
 
+#include "libIARMCore.h"
+
 namespace {
 
 constexpr IARM_EventId_t kEventA = 1;
@@ -151,4 +153,19 @@ TEST_F(IarmBusEventTest, InvalidArgumentsAreRejected)
     EXPECT_EQ(IARM_RESULT_INVALID_PARAM,
               IARM_Bus_BroadcastEvent(longOwner.c_str(), kEventA, &value, sizeof(value)));
     EXPECT_EQ(IARM_RESULT_INVALID_PARAM, IARM_Bus_BroadcastEvent(kClientName, 0x1FF, &value, sizeof(value)));
+}
+
+TEST_F(IarmBusEventTest, RemoveReportsMissingCoreListener)
+{
+    ASSERT_EQ(IARM_RESULT_SUCCESS, IARM_Bus_RegisterEventHandler(kClientName, kEventA, HandlerA));
+    // Drop the core listener underneath libIBus so its own removal fails.
+    ASSERT_EQ(IARM_RESULT_SUCCESS, IARM_UnRegisterListner(kClientName, kEventA));
+    EXPECT_EQ(IARM_RESULT_INVALID_PARAM, IARM_Bus_RemoveEventHandler(kClientName, kEventA, HandlerA));
+}
+
+TEST_F(IarmBusEventTest, TermReleasesHandlersLeftRegistered)
+{
+    ASSERT_EQ(IARM_RESULT_SUCCESS, IARM_Bus_RegisterEventHandler(kClientName, kEventA, HandlerA));
+    ASSERT_EQ(IARM_RESULT_SUCCESS, IARM_Bus_RegisterEventHandler(kClientName, kEventB, HandlerB));
+    // No unregister: fixture TearDown's IARM_Bus_Term must free them.
 }
