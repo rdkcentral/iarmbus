@@ -125,7 +125,10 @@ void StopIarmDaemon(int signal)
     g_iarmDaemonPid = -1;
 }
 
-void StartIarmDaemon(const std::vector<std::string> &args)
+namespace {
+
+void StartDaemonBinary(const char *path, const std::vector<std::string> &args,
+                       bool (*isReady)(const std::string &log))
 {
     const std::string logPath = g_workDir + "/iarmbusd.log";
     // Remove before forking so readiness polling can never see a previous daemon's log.
@@ -137,32 +140,49 @@ void StartIarmDaemon(const std::vector<std::string> &args)
         const int log = open(logPath.c_str(), O_WRONLY | O_CREAT | O_TRUNC, 0600);
         dup2(log, STDOUT_FILENO);
         close(log);
-        std::vector<char *> argv{const_cast<char *>(IARMBUSD_PATH)};
+        std::vector<char *> argv{const_cast<char *>(path)};
         for (const std::string &arg : args) {
             argv.push_back(const_cast<char *>(arg.c_str()));
         }
         argv.push_back(nullptr);
-        execv(IARMBUSD_PATH, argv.data());
+        execv(path, argv.data());
         _exit(127);
     }
 
-    // iarmbusd logs "servers Entering" once before and once after IARM_Bus_DaemonStart.
     for (int i = 0; i < 250; ++i) {
         std::ifstream in(logPath);
         std::stringstream text;
         text << in.rdbuf();
         const std::string log = text.str();
-        const size_t first = log.find("servers Entering");
-        if (first != std::string::npos && log.find("servers Entering", first + 1) != std::string::npos) {
+        if (isReady(log)) {
             return;
         }
         if (waitpid(g_iarmDaemonPid, nullptr, WNOHANG) == g_iarmDaemonPid) {
             g_iarmDaemonPid = -1;
-            FAIL() << "iarmbusd exited during startup:\n" << log;
+            FAIL() << path << " exited during startup:\n" << log;
         }
         usleep(20 * 1000);
     }
-    FAIL() << "iarmbusd did not become ready";
+    FAIL() << path << " did not become ready";
+}
+
+}  // namespace
+
+void StartIarmDaemon(const std::vector<std::string> &args)
+{
+    // IARMDaemonMain-dbus.c logs "servers Entering" before and after IARM_Bus_DaemonStart.
+    StartDaemonBinary(IARMBUSD_PATH, args, [](const std::string &log) {
+        const size_t first = log.find("servers Entering");
+        return first != std::string::npos && log.find("servers Entering", first + 1) != std::string::npos;
+    });
+}
+
+void StartLegacyIarmDaemon(const std::vector<std::string> &args)
+{
+    // IARMDaemonMain.c only logs its first heartbeat after IARM_Bus_DaemonStart.
+    StartDaemonBinary(IARMBUSD_LEGACY_PATH, args, [](const std::string &log) {
+        return log.find("Bus Daemon HeartBeat") != std::string::npos;
+    });
 }
 
 RawDbusPeer::RawDbusPeer(const std::string &name)

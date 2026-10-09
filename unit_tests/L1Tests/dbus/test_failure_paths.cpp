@@ -147,3 +147,22 @@ TEST(IarmBusDaemonProcess, HandlesTrailingDebugConfigAndSigint)
     EXPECT_EQ(IARM_RESULT_SUCCESS, IARM_Bus_Disconnect());
     EXPECT_EQ(IARM_RESULT_SUCCESS, IARM_Bus_Term());
 }
+
+TEST(IarmBusDaemonProcess, LegacyMainServesClients)
+{
+    StopIarmDaemon();
+    for (const auto &args : {std::vector<std::string>{"--debugconfig", "/dev/null"},
+                             std::vector<std::string>{"--debugconfig"}}) {
+        ASSERT_NO_FATAL_FAILURE(StartLegacyIarmDaemon(args));
+
+        ASSERT_EQ(IARM_RESULT_SUCCESS, IARM_Bus_Init(kClientName));
+        ASSERT_EQ(IARM_RESULT_SUCCESS, IARM_Bus_Connect());
+        int registered = 0;
+        EXPECT_EQ(IARM_RESULT_SUCCESS, IARM_Bus_IsConnected(kClientName, &registered));
+        EXPECT_EQ(IARM_RESULT_SUCCESS, IARM_Bus_Disconnect());
+        EXPECT_EQ(IARM_RESULT_SUCCESS, IARM_Bus_Term());
+
+        StopIarmDaemon(args.size() == 1 ? SIGINT : SIGTERM);
+    }
+    ASSERT_NO_FATAL_FAILURE(StartIarmDaemon());
+}

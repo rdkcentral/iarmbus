@@ -24,6 +24,8 @@ const std::string &DbusTestWorkDir();
 // Control the instrumented iarmbusd; StartIarmDaemon uses gtest assertions.
 void StopIarmDaemon(int signal = SIGTERM);
 void StartIarmDaemon(const std::vector<std::string> &args = {"--debugconfig", "/dev/null"});
+// Same, but launches the core/IARMDaemonMain.c build; stop it with StopIarmDaemon.
+void StartLegacyIarmDaemon(const std::vector<std::string> &args);
 
 // A bare libdbus connection that owns process.iarm.<name> and answers IARM
 // method calls from its own thread, used to fake peers and malformed replies.

@@ -48,6 +48,15 @@ if(ENABLE_COVERAGE)
     target_compile_options(iarmbusd_under_test PRIVATE --coverage -O0 -g)
 endif()
 
+# Older daemon entry point; it only depends on the libIBus API, so it links against the DBus library too.
+add_executable(iarmbusd_legacy_under_test ../../core/IARMDaemonMain.c)
+set_source_files_properties(../../core/IARMDaemonMain.c PROPERTIES LANGUAGE CXX)
+target_include_directories(iarmbusd_legacy_under_test PRIVATE ../../core/include)
+target_link_libraries(iarmbusd_legacy_under_test PRIVATE iarmbus_under_test)
+if(ENABLE_COVERAGE)
+    target_compile_options(iarmbusd_legacy_under_test PRIVATE --coverage -O0 -g)
+endif()
+
 # Runs the real libIARM/libIBus DBus paths against a private dbus-daemon and iarmbusd.
 add_executable(run_L1DbusTests
     dbus/dbus_test_env.cpp dbus/test_rpc.cpp dbus/test_events.cpp
@@ -55,8 +64,9 @@ add_executable(run_L1DbusTests
     dbus/test_call_handler.cpp dbus/test_failure_paths.cpp)
 target_compile_features(run_L1DbusTests PRIVATE cxx_std_14)
 target_compile_definitions(run_L1DbusTests PRIVATE TP_ENABLED
-    IARMBUSD_PATH="$<TARGET_FILE:iarmbusd_under_test>")
-add_dependencies(run_L1DbusTests iarmbusd_under_test)
+    IARMBUSD_PATH="$<TARGET_FILE:iarmbusd_under_test>"
+    IARMBUSD_LEGACY_PATH="$<TARGET_FILE:iarmbusd_legacy_under_test>")
+add_dependencies(run_L1DbusTests iarmbusd_under_test iarmbusd_legacy_under_test)
 target_include_directories(run_L1DbusTests PRIVATE ../../core ../../core/include dbus)
 target_link_libraries(run_L1DbusTests PRIVATE iarmbus_under_test GTest::gtest_main)
 
