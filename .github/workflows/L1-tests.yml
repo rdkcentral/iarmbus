@@ -20,13 +20,33 @@ jobs:
       - name: Install build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y build-essential cmake pkg-config libglib2.0-dev libdbus-1-dev libgtest-dev
+          sudo apt-get install -y build-essential cmake pkg-config libglib2.0-dev libdbus-1-dev libgtest-dev lcov
 
       - name: Configure
-        run: cmake -S unit_tests/L1Tests -B build/l1 -DCMAKE_BUILD_TYPE=Debug
+        run: cmake -S unit_tests/L1Tests -B build/l1 -DCMAKE_BUILD_TYPE=Debug -DENABLE_COVERAGE=ON
 
       - name: Build
         run: cmake --build build/l1 --parallel
 
       - name: Run L1 tests
-        run: ctest --test-dir build/l1 --output-on-failure
+        run: |
+          lcov --zerocounters --directory build/l1
+          ctest --test-dir build/l1 --output-on-failure --verbose --output-junit L1TestResults.xml
+
+      - name: Generate coverage
+        if: always()
+        run: |
+          lcov --capture --directory build/l1 --output-file coverage.info
+          lcov --remove coverage.info '/usr/*' '*/unit_tests/*' --output-file filtered_coverage.info
+          lcov --list filtered_coverage.info
+          genhtml filtered_coverage.info --output-directory coverage --title "iarmbus L1 coverage"
+
+      - name: Upload artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: artifacts-L1-iarmbus
+          path: |
+            coverage/
+            build/l1/L1TestResults.xml
+          if-no-files-found: warn
