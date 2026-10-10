@@ -69,23 +69,58 @@ typedef int errno_t;
 #define ESLEMAX          403       /* length exceeds RSIZE_MAX    */
 #define ESNOSPC          406       /* not enough space for s2     */
 
-#define strcpy_s(dst,max,src) (src != NULL)?((max > strlen(src))?EOK:ESLEMAX):ESNULLP; \
- if((src != NULL) && (max > strlen(src))) strcpy(dst,src);
+static inline errno_t strcpy_s(char *dst, size_t max, const char *src) {
+    size_t len;
+    if (dst == NULL || src == NULL) return ESNULLP;
+    len = strlen(src);
+    if (len >= max) return ESLEMAX;
+    memcpy(dst, src, len + 1);
+    return EOK;
+}
 
-#define strncpy_s(dst,max,src,len) (src != NULL)?((len <= max)?EOK:ESLEMAX):ESNULLP; \
- if((src != NULL) && (len <= max)) strncpy(dst,src,len);
+static inline errno_t strncpy_s(char *dst, size_t max, const char *src, size_t len) {
+    if (dst == NULL || src == NULL) return ESNULLP;
+    if (len >= max) return ESLEMAX;
+    memcpy(dst, src, len);
+    dst[len] = '\0';
+    return EOK;
+}
 
-#define memset_s(dst,max_1,c,max) EOK; \
- memset(dst,c,max);
+static inline errno_t iarm_dummy_memset_s(void *dst, size_t dmax, int value, size_t len) {
+    if (dst == NULL) return ESNULLP;
+    if (len > dmax) return ESLEMAX;
+    memset(dst, value, len);
+    return EOK;
+}
+#define memset_s(dst, dmax, value, len) iarm_dummy_memset_s(dst, dmax, value, len)
 
-#define strcat_s(dst,max,src) (src != NULL)?((max > strlen(src))?EOK:ESLEMAX):ESNULLP; \
- if((src != NULL) && (max > strlen(src))) strcat(dst,src);
+static inline errno_t strcat_s(char *dst, size_t max, const char *src) {
+    size_t dstlen;
+    size_t srclen;
+    if (dst == NULL || src == NULL) return ESNULLP;
+    dstlen = strnlen(dst, max);
+    srclen = strlen(src);
+    if (dstlen == max || srclen >= max - dstlen) return ESLEMAX;
+    memcpy(dst + dstlen, src, srclen + 1);
+    return EOK;
+}
 
-#define strncat_s(dst,max,src,len) (src != NULL)?((len <= max)?EOK:ESLEMAX):ESNULLP; \
- if((src != NULL) && (len <= max)) strncat(dst,src,len);
+static inline errno_t strncat_s(char *dst, size_t max, const char *src, size_t len) {
+    size_t dstlen;
+    if (dst == NULL || src == NULL) return ESNULLP;
+    dstlen = strnlen(dst, max);
+    if (dstlen == max || len >= max - dstlen) return ESLEMAX;
+    memcpy(dst + dstlen, src, len);
+    dst[dstlen + len] = '\0';
+    return EOK;
+}
 
-#define memcpy_s(dst,max,src,len)  EOK; \
- memcpy(dst,src,len);
+static inline errno_t memcpy_s(void *dst, size_t dmax, const void *src, size_t len) {
+    if (dst == NULL || src == NULL) return ESNULLP;
+    if (len > dmax) return ESLEMAX;
+    memcpy(dst, src, len);
+    return EOK;
+}
 
 #ifndef STRCPY_S_NOCLOBBER
  #define STRCPY_S_NOCLOBBER(dst,max,src) (src != NULL)?((max > strlen(src))?EOK:ESLEMAX):ESNULLP; \
@@ -97,7 +132,7 @@ typedef int errno_t;
 
 #define strtok_s(dest, dmax, delim, ptr) strtok_r(dest, delim, ptr)
 
-#define sprintf_s( dst, max, fmt, ... ) (parseFormat(dst, max, fmt, ##__VA_ARGS__) == 0) ? -ESNULLP : sprintf( dst, fmt, ##__VA_ARGS__)
+#define sprintf_s(dst, max, fmt, ...) snprintf(dst, max, fmt, ##__VA_ARGS__)
 
 #define STRCPY_S(dest,size,source)                      \
 	{ \
