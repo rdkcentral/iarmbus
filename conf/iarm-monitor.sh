@@ -33,6 +33,8 @@ abort_and_reboot() {
         log "${PROCESS_NAME} not running — calling rebootNow.sh directly"
     fi
     log "Triggering: /rebootNow.sh -c ${PROCESS_NAME}"
+    # Flush the log (once, not per line) so the last messages survive the reboot.
+    sync
     /rebootNow.sh -c "${PROCESS_NAME}"
 }
 

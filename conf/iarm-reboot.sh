@@ -42,6 +42,10 @@ PROCESS_NAME="${2:-unknown-process}"
 LOG_FILE="/opt/logs/uimgr_log.txt"
 TAG="[iarm-reboot:${SERVICE_NAME}]"
 
+log() {
+    echo "`/bin/timestamp` :${TAG} $*" >> "${LOG_FILE}"
+}
+
 EXIT_CODE="${EXIT_CODE:-0}"
 EXIT_STATUS="${EXIT_STATUS:-}"
 
@@ -57,13 +61,13 @@ if [ -z "${SERVICE_RESULT}" ] || [ "${SERVICE_RESULT}" = "unknown" ]; then
     SERVICE_RESULT="${SERVICE_RESULT:-unknown}"
 fi
 
-echo "${TAG} ${PROCESS_NAME} exited: SERVICE_RESULT=${SERVICE_RESULT}" \
-     "EXIT_CODE=${EXIT_CODE} EXIT_STATUS=${EXIT_STATUS}" >&2
+log "${PROCESS_NAME} exited: SERVICE_RESULT=${SERVICE_RESULT}" \
+    "EXIT_CODE=${EXIT_CODE} EXIT_STATUS=${EXIT_STATUS}"
 
 case "${SERVICE_RESULT}" in
     success)
         # Clean stop — systemctl stop or process returned 0. No reboot needed.
-        echo "${TAG} Clean exit — no reboot triggered." >&2
+        log "Clean exit — no reboot triggered."
         rm -f "/tmp/${SERVICE_NAME}.ready"
         exit 0
         ;;
@@ -80,30 +84,30 @@ case "${SERVICE_RESULT}" in
         SENTINEL="/tmp/${SERVICE_NAME}.ready"
         if [ "${EXIT_CODE}" = "0" ]; then
             if [ -f "${SENTINEL}" ]; then
-                echo "${TAG} Result unknown; EXIT_CODE=0; sentinel present" \
-                     "— treating as clean exit, no reboot." >&2
+                log "Result unknown; EXIT_CODE=0; sentinel present" \
+                    "— treating as clean exit, no reboot."
                 rm -f "${SENTINEL}"
                 exit 0
             else
-                echo "${TAG} Result unknown; EXIT_CODE=0; sentinel absent" \
-                     "— ${PROCESS_NAME} never fully started (start-timeout or early failure)" \
-                     "— triggering reboot." >&2
+                log "Result unknown; EXIT_CODE=0; sentinel absent" \
+                    "— ${PROCESS_NAME} never fully started (start-timeout or early failure)" \
+                    "— triggering reboot."
             fi
         else
-            echo "${TAG} Result unknown; EXIT_CODE=${EXIT_CODE}" \
-                 "— treating as abnormal exit, triggering reboot." >&2
+            log "Result unknown; EXIT_CODE=${EXIT_CODE}" \
+                "— treating as abnormal exit, triggering reboot."
         fi
         rm -f "${SENTINEL}"
         ;;
     signal|core-dump)
         # Crashed by an unhandled signal (SIGSEGV=11, SIGABRT=6, etc.)
-        echo "${TAG} Crash detected (${SERVICE_RESULT} / ${EXIT_STATUS})" \
-             "— triggering reboot via rebootNow.sh" >&2
+        log "Crash detected (${SERVICE_RESULT} / ${EXIT_STATUS})" \
+            "— triggering reboot via rebootNow.sh"
         ;;
     exit-code|timeout|*)
         # Non-zero exit or watchdog timeout — treat as abnormal.
-        echo "${TAG} Abnormal exit (${SERVICE_RESULT} / code=${EXIT_CODE})" \
-             "— triggering reboot via rebootNow.sh" >&2
+        log "Abnormal exit (${SERVICE_RESULT} / code=${EXIT_CODE})" \
+            "— triggering reboot via rebootNow.sh"
         ;;
 esac
 
@@ -131,22 +135,20 @@ else
 fi
 echo "${count}" > "${COUNTER_FILE}"
 
-echo "${TAG} ${PROCESS_NAME} restart count: ${count}/${MAX_REBOOTS}" >&2
-echo "${TAG} ${PROCESS_NAME} restart count: ${count}/${MAX_REBOOTS}" >> "${LOG_FILE}"
+log "${PROCESS_NAME} restart count: ${count}/${MAX_REBOOTS}"
 
 if [ "${count}" -gt "${MAX_REBOOTS}" ]; then
     # Mirrors: "-----Box has rebooted 10 times.. no more reboot----"
     # Exit 0: suppressing reboot is intentional, not an error — avoids
     # marking the ExecStopPost as failed in systemd unit state.
-    echo "${TAG} Box has rebooted ${MAX_REBOOTS} times — no more reboot." >&2
-    echo "${TAG} Box has rebooted ${MAX_REBOOTS} times — no more reboot." >> "${LOG_FILE}"
+    log "Box has rebooted ${MAX_REBOOTS} times — no more reboot."
     rm -f "/tmp/${SERVICE_NAME}.ready"
     exit 0
 fi
 
 # Mirrors: check "Dependency failed" then pick -s or -c flag for rebootNow.sh
 if systemctl -l status "${SERVICE_NAME}" 2>/dev/null | grep -qi "Dependency failed"; then
-    echo "${TAG} Dependency failure detected." >&2
+    log "Dependency failure detected."
     REBOOT_ARGS="-s ${PROCESS_NAME} -o due_to_service_dependency_failure"
 else
     # -c indicates a crash reboot (mirrors RDK-v: /rebootNow.sh -c <process>)
@@ -156,12 +158,15 @@ fi
 # Remove the ready sentinel before rebooting.
 rm -f "/tmp/${SERVICE_NAME}.ready"
 
-echo "${TAG} Triggering: /rebootNow.sh ${REBOOT_ARGS}" >&2
+log "Triggering: /rebootNow.sh ${REBOOT_ARGS}"
+# Flush the log (once, not per line) so the last messages survive the reboot.
+sync
 
 if [ -x /rebootNow.sh ]; then
     exec /rebootNow.sh ${REBOOT_ARGS}
 else
-    echo "${TAG} ERROR: /rebootNow.sh not found or not executable" >&2
+    log "ERROR: /rebootNow.sh not found or not executable"
     # Fall back to a hard reboot if the script is missing.
+    sync
     /sbin/reboot
 fi
