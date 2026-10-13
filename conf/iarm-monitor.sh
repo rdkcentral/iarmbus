@@ -15,7 +15,7 @@ LOG_FILE="/opt/logs/uimgr_log.txt"
 TAG="[iarm-monitor:${SERVICE_NAME}]"
 
 POLL_INTERVAL=5
-MAX_WAIT=45
+MAX_WAIT=60
 
 log() {
     echo "`/bin/timestamp` :${TAG} $*" >> "${LOG_FILE}"
