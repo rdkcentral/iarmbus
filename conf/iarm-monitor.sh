@@ -15,10 +15,10 @@ LOG_FILE="/opt/logs/uimgr_log.txt"
 TAG="[iarm-monitor:${SERVICE_NAME}]"
 
 POLL_INTERVAL=5
-MAX_WAIT=180
+MAX_WAIT=60
 
 log() {
-    echo "${TAG} $*" >> "${LOG_FILE}"
+    echo "`/bin/timestamp` :${TAG} $*" >> "${LOG_FILE}"
 }
 
 # Send SIGABRT to the process (if still running), wait for breakpad, then reboot.
@@ -33,6 +33,8 @@ abort_and_reboot() {
         log "${PROCESS_NAME} not running — calling rebootNow.sh directly"
     fi
     log "Triggering: /rebootNow.sh -c ${PROCESS_NAME}"
+    # Flush the log (once, not per line) so the last messages survive the reboot.
+    sync
     /rebootNow.sh -c "${PROCESS_NAME}"
 }
 
@@ -54,6 +56,7 @@ do
         exit 0
     fi
 
+    log "Next polling in ${POLL_INTERVAL}s"
     sleep "$POLL_INTERVAL"
     elapsed=$((elapsed + POLL_INTERVAL))
 done
