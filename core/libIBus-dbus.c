@@ -166,7 +166,7 @@ int log(const char *format, ...)
     }
     else
     {
-        return printf(tmp_buff);
+        return printf("%s", tmp_buff);
     }
     return 0;	
 }

@@ -6,6 +6,20 @@ IARM Bus operates as a system-level service, launched early in the boot sequence
 
 At the module level, IARM Bus provides a client library (`libIARMBus`) that middleware components link against, and a daemon (`IARMDaemonMain`) that acts as the central coordinator for member registration, resource ownership arbitration, and system-wide pre-change notifications. The daemon maintains the list of registered members and dispatches coordinated lifecycle calls (power pre-change, resolution pre-change, deep-sleep wakeup, and system-mode change) to all registered members before the corresponding state transition occurs.
 
+## L1 unit tests
+
+The DBus implementation has a standalone L1 test build. On Linux, install
+`cmake`, `pkg-config`, `libglib2.0-dev`, `libdbus-1-dev`, and `libgtest-dev`, then run:
+
+```sh
+cmake -S unit_tests/L1Tests -B build/l1 -DCMAKE_BUILD_TYPE=Debug
+cmake --build build/l1 --parallel
+ctest --test-dir build/l1 --output-on-failure
+```
+
+These tests use in-repository linker wrappers for core lifecycle calls; no
+system DBus daemon is needed.
+
 ```mermaid
 flowchart LR
 
