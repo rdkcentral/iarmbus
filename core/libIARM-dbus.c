@@ -111,7 +111,18 @@ typedef struct _IARM_Ctxt_t {
 } IARM_Ctx_t;
 
 static IARM_Ctx_t *m_grpCtx = NULL;
+typedef enum _IARM_FilterType_t {
+    IARM_FILTER_METHOD,
+    IARM_FILTER_EVENT
+} IARM_FilterType_t;
+
+typedef struct _IARM_FilterContext_t {
+    IARM_FilterType_t type;
+    void *cctx;
+} IARM_FilterContext_t;
+
 typedef struct _IARM_UICall_t {
+    IARM_FilterType_t type;
     void *cctx;
     char callName[IARM_MAX_NAME_LEN];
     IARM_Call_t handler;
@@ -119,6 +130,7 @@ typedef struct _IARM_UICall_t {
 } IARM_UICall_t;
 
 typedef struct _IARM_UIEvent_t {
+    IARM_FilterType_t type;
     void *cctx;
     IARM_EventId_t  eventId;
     IARM_Listener_t listener;
@@ -241,11 +253,15 @@ DBusHandlerResult dbusCallHandler(DBusConnection *connection, DBusMessage *msg, 
             return DBUS_HANDLER_RESULT_HANDLED;
         }
 
-        IARM_UICall_t *callInfo = (IARM_UICall_t *)user_data;
+        IARM_FilterContext_t *filterInfo = (IARM_FilterContext_t *)user_data;
+        IARM_UICall_t *callInfo = NULL;
 
         // check if the message is a signal from the correct interface and with the correct name
         if (dbus_message_has_interface(msg, "iarm.signal.Type"))
         {
+            if (filterInfo->type != IARM_FILTER_EVENT) {
+                goto ignore;
+            }
             IARM_UIEvent_t *eventInfo = (IARM_UIEvent_t *)user_data;
             if (eventInfo->cctx == NULL) {
                 printf("IARM: cctx is NULL in dbusCallHandler \n");
@@ -327,8 +343,15 @@ DBusHandlerResult dbusCallHandler(DBusConnection *connection, DBusMessage *msg, 
 
         /* TODO: Add return DBUS_HANDLER_RESULT_HANDLED; here */
     }
-    else if (dbus_message_is_method_call(msg, "iarm.method.Type", callInfo->callName))
+    else if (dbus_message_has_interface(msg, "iarm.method.Type"))
     {
+        if (filterInfo->type != IARM_FILTER_METHOD) {
+            goto ignore;
+        }
+        callInfo = (IARM_UICall_t *)user_data;
+        if (!dbus_message_is_method_call(msg, "iarm.method.Type", callInfo->callName)) {
+            goto ignore;
+        }
         DBusMessageIter arglist, arraylist;
         int size;
         unsigned char *callArg;
@@ -443,7 +466,7 @@ IARM_Result_t IARM_RegisterCall(const char *ownerName, const char *callName, IAR
         }
 
         memset(callInfo, 0, sizeof(IARM_UICall_t));
-        
+        callInfo->type = IARM_FILTER_METHOD;
         callInfo->cctx = cctx;
         callInfo->callCtx = callCtx;
         callInfo->handler = handler;
@@ -945,6 +968,7 @@ IARM_Result_t IARM_RegisterListner(const char *ownerName, IARM_EventId_t eventId
             return  IARM_RESULT_INVALID_PARAM;
         }
         
+        eventInfo->type = IARM_FILTER_EVENT;
         eventInfo->cctx = cctx;
         eventInfo->callCtx = callCtx;
         eventInfo->eventId = eventId;
