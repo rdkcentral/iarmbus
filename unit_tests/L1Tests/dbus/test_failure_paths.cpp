@@ -8,6 +8,7 @@
 
 #include "libIBusDaemon.h"
 #include "libIBusDaemonInternal.h"
+#include "libIARMCore.h"
 
 namespace {
 
@@ -29,6 +30,33 @@ TEST_F(IarmBusClientTest, MalformedRepliesAreRejected)
     EXPECT_EQ(IARM_RESULT_INVALID_PARAM, IARM_Bus_Call(kPeerName, "EmptyReply", &value, sizeof(value)));
     EXPECT_EQ(IARM_RESULT_INVALID_PARAM, IARM_Bus_Call(kPeerName, "StringReply", &value, sizeof(value)));
     EXPECT_EQ(IARM_RESULT_SUCCESS, IARM_Bus_Call(kPeerName, "Echo", &value, sizeof(value)));
+}
+
+TEST_F(IarmBusClientTest, MalformedTransportRepliesDoNotMutateOutputs)
+{
+    RawDbusPeer peer(kPeerName);
+    ASSERT_TRUE(peer.OwnsName());
+
+    constexpr int kInitialValue = 0x10203040;
+    constexpr int kInitialReplyCode = 0x50607080;
+    void *argument = nullptr;
+    ASSERT_EQ(IARM_RESULT_SUCCESS,
+              IARM_Malloc(IARM_MEMTYPE_PROCESSLOCAL, sizeof(kInitialValue), &argument));
+
+    for (const char *method : {"OversizedReply", "TrailingReply"}) {
+        SCOPED_TRACE(method);
+        std::memcpy(argument, &kInitialValue, sizeof(kInitialValue));
+        int replyCode = kInitialReplyCode;
+
+        EXPECT_EQ(IARM_RESULT_INVALID_PARAM, IARM_Call(kPeerName, method, argument, &replyCode));
+
+        int actualValue = 0;
+        std::memcpy(&actualValue, argument, sizeof(actualValue));
+        EXPECT_EQ(kInitialValue, actualValue);
+        EXPECT_EQ(kInitialReplyCode, replyCode);
+    }
+
+    EXPECT_EQ(IARM_RESULT_SUCCESS, IARM_Free(IARM_MEMTYPE_PROCESSLOCAL, argument));
 }
 
 TEST_F(IarmBusClientTest, OwnerThatReleasesHandsResourceOver)

@@ -45,6 +45,7 @@ extern "C"
 #include "libIARMCore.h"
 #include "libIBus.h"
 #include "libIBusDaemonInternal.h"
+#include "iarmReplyValidation.h"
 #include <dbus/dbus.h>
 #include <stdbool.h>
 #include <unistd.h>
@@ -111,7 +112,13 @@ typedef struct _IARM_Ctxt_t {
 } IARM_Ctx_t;
 
 static IARM_Ctx_t *m_grpCtx = NULL;
+typedef enum _IARM_FilterType_t {
+    IARM_FILTER_METHOD,
+    IARM_FILTER_EVENT
+} IARM_FilterType_t;
+
 typedef struct _IARM_UICall_t {
+    IARM_FilterType_t type;
     void *cctx;
     char callName[IARM_MAX_NAME_LEN];
     IARM_Call_t handler;
@@ -119,6 +126,7 @@ typedef struct _IARM_UICall_t {
 } IARM_UICall_t;
 
 typedef struct _IARM_UIEvent_t {
+    IARM_FilterType_t type;
     void *cctx;
     IARM_EventId_t  eventId;
     IARM_Listener_t listener;
@@ -241,11 +249,15 @@ DBusHandlerResult dbusCallHandler(DBusConnection *connection, DBusMessage *msg, 
             return DBUS_HANDLER_RESULT_HANDLED;
         }
 
-        IARM_UICall_t *callInfo = (IARM_UICall_t *)user_data;
+        IARM_FilterType_t filterType = *(IARM_FilterType_t *)user_data;
+        IARM_UICall_t *callInfo = NULL;
 
         // check if the message is a signal from the correct interface and with the correct name
         if (dbus_message_has_interface(msg, "iarm.signal.Type"))
         {
+            if (filterType != IARM_FILTER_EVENT) {
+                goto ignore;
+            }
             IARM_UIEvent_t *eventInfo = (IARM_UIEvent_t *)user_data;
             if (eventInfo->cctx == NULL) {
                 printf("IARM: cctx is NULL in dbusCallHandler \n");
@@ -327,10 +339,20 @@ DBusHandlerResult dbusCallHandler(DBusConnection *connection, DBusMessage *msg, 
 
         /* TODO: Add return DBUS_HANDLER_RESULT_HANDLED; here */
     }
-    else if (dbus_message_is_method_call(msg, "iarm.method.Type", callInfo->callName))
+    else if (dbus_message_has_interface(msg, "iarm.method.Type"))
     {
+        if (filterType != IARM_FILTER_METHOD) {
+            goto ignore;
+        }
+        callInfo = (IARM_UICall_t *)user_data;
+        if (!dbus_message_is_method_call(msg, "iarm.method.Type", callInfo->callName)) {
+            goto ignore;
+        }
+
         DBusMessageIter arglist, arraylist;
-        int size;
+        dbus_uint32_t declaredSize;
+        int arraySize;
+        size_t payloadSize;
         unsigned char *callArg;
         
         if(!dbus_message_iter_init(msg, &arglist))
@@ -345,7 +367,7 @@ DBusHandlerResult dbusCallHandler(DBusConnection *connection, DBusMessage *msg, 
             goto ignore;
         }
 
-        dbus_message_iter_get_basic(&arglist, &size);
+        dbus_message_iter_get_basic(&arglist, &declaredSize);
         dbus_message_iter_next(&arglist);
         
         if (dbus_message_iter_get_arg_type(&arglist) != DBUS_TYPE_ARRAY ||
@@ -356,12 +378,21 @@ DBusHandlerResult dbusCallHandler(DBusConnection *connection, DBusMessage *msg, 
         }
                     
         dbus_message_iter_recurse(&arglist, &arraylist);
-        dbus_message_iter_get_fixed_array(&arraylist, (void *)&callArg, &size);
+        dbus_message_iter_get_fixed_array(&arraylist, (void *)&callArg, &arraySize);
+        if (arraySize < _IARM_MEM_EXTRA_ALLOC_SIZE || declaredSize != (dbus_uint32_t)arraySize)
+        {
+            log("%s Error method call sizes are inconsistent\n", __FUNCTION__);
+            goto ignore;
+        }
+        payloadSize = (size_t)(arraySize - _IARM_MEM_EXTRA_ALLOC_SIZE);
         callArg += _IARM_MEM_EXTRA_ALLOC_SIZE;
+        if (IARM_GetSize(callArg) != payloadSize)
+        {
+            log("%s Error method call allocation size does not match payload\n", __FUNCTION__);
+            goto ignore;
+        }
     #ifdef TP_ENABLED
-        IARM_Bus_SetIncomingPayloadSize(
-            (size >= _IARM_MEM_EXTRA_ALLOC_SIZE) ?
-            (size_t)size - _IARM_MEM_EXTRA_ALLOC_SIZE : 0);
+        IARM_Bus_SetIncomingPayloadSize(payloadSize);
     #endif
 
         // Add null check for callInfo before using it
@@ -369,7 +400,7 @@ DBusHandlerResult dbusCallHandler(DBusConnection *connection, DBusMessage *msg, 
             printf("IARM: callInfo or handler is NULL in dbusCallHandler\n");
             return DBUS_HANDLER_RESULT_HANDLED;
         }
-        callInfo->handler(callInfo->callCtx, 0, (void *)callArg, (void *)msg);
+        callInfo->handler(callInfo->callCtx, (unsigned long)payloadSize, (void *)callArg, (void *)msg);
         return DBUS_HANDLER_RESULT_HANDLED;   
         }
     else if (!dbus_message_has_interface(msg, "iarm.method.Type"))
@@ -444,6 +475,7 @@ IARM_Result_t IARM_RegisterCall(const char *ownerName, const char *callName, IAR
 
         memset(callInfo, 0, sizeof(IARM_UICall_t));
         
+        callInfo->type = IARM_FILTER_METHOD;
         callInfo->cctx = cctx;
         callInfo->callCtx = callCtx;
         callInfo->handler = handler;
@@ -525,6 +557,9 @@ IARM_Result_t IARM_CallWithTimeout(const char *ownerName,  const char *funcName,
     DBusMessage *replyMsg;
     DBusError error;
     uint32_t size;
+    size_t argCapacity;
+    int replySize;
+    int replyCode;
     unsigned char *byteIndex = (unsigned char *)arg, *returnArg;
 
     if (!IARM_GrpCtx_IsValid(cctx) || ownerName == NULL || funcName == NULL)
@@ -559,7 +594,8 @@ IARM_Result_t IARM_CallWithTimeout(const char *ownerName,  const char *funcName,
         /* append arguments onto signal */
         dbus_message_iter_init_append(msg, &arglist);
 
-        size = (uint32_t) IARM_GetSize(arg);
+        argCapacity = IARM_GetSize(arg);
+        size = (uint32_t)argCapacity;
         size += _IARM_MEM_EXTRA_ALLOC_SIZE; /* include prefix */
         byteIndex -= _IARM_MEM_EXTRA_ALLOC_SIZE;
 
@@ -618,47 +654,41 @@ IARM_Result_t IARM_CallWithTimeout(const char *ownerName,  const char *funcName,
         dbus_message_unref(msg);
 
      
-        if(!dbus_message_iter_init(replyMsg, &arglist))
+        if (!dbus_message_iter_init(replyMsg, &arglist))
         {
             log("%s Error dbus_message_iter_init failed\n", __FUNCTION__); 
-            // free reply message
             dbus_message_unref(replyMsg);
             return IARM_RESULT_INVALID_PARAM;
         }
 
-                   
         if (dbus_message_iter_get_arg_type(&arglist) != DBUS_TYPE_INT32)
         {   
-           // log("%s Error Return type is not INT32\n", __FUNCTION__); 
-            // free reply message
             dbus_message_unref(replyMsg);
             return IARM_RESULT_INVALID_PARAM;
         }
 
-        dbus_message_iter_get_basic(&arglist, ret);
+        dbus_message_iter_get_basic(&arglist, &replyCode);
 
-        dbus_message_iter_next(&arglist);
-        
-        if (dbus_message_iter_get_arg_type(&arglist) != DBUS_TYPE_ARRAY ||
+        if (!dbus_message_iter_next(&arglist) ||
+            dbus_message_iter_get_arg_type(&arglist) != DBUS_TYPE_ARRAY ||
             dbus_message_iter_get_element_type(&arglist) != DBUS_TYPE_BYTE)
-        {   
-            log("%s Error Reply argument is malformed\n", __FUNCTION__); 
-        }
-
-        size -= _IARM_MEM_EXTRA_ALLOC_SIZE; /* doesn't include prefix this time */
-
-        dbus_message_iter_recurse(&arglist, &arraylist);
-        dbus_message_iter_get_fixed_array(&arraylist, (void *)&returnArg, (int *)&size);
-        
-	rc = memcpy_s(arg, size, returnArg, size);
-        if(rc!=EOK)
         {
-                ERR_CHK(rc);
+            dbus_message_unref(replyMsg);
+            return IARM_RESULT_INVALID_PARAM;
+        }
+        dbus_message_iter_recurse(&arglist, &arraylist);
+        dbus_message_iter_get_fixed_array(&arraylist, (void *)&returnArg, &replySize);
+        if (dbus_message_iter_next(&arglist) ||
+            !IARM_CopyValidatedReply(arg, argCapacity, returnArg, replySize))
+        {
+            log("%s Error Reply argument is malformed or exceeds destination capacity\n", __FUNCTION__);
+            dbus_message_unref(replyMsg);
+            return IARM_RESULT_INVALID_PARAM;
         }
 
-	returnArg = (unsigned char *) arg;
+	*ret = replyCode;
 
-         // free reply message
+        // free reply message
         dbus_message_unref(replyMsg);
         //printf("%s call exiting %s %s return %d \n", __FUNCTION__, ownerName, funcName, *ret); 
     }
@@ -945,6 +975,7 @@ IARM_Result_t IARM_RegisterListner(const char *ownerName, IARM_EventId_t eventId
             return  IARM_RESULT_INVALID_PARAM;
         }
         
+        eventInfo->type = IARM_FILTER_EVENT;
         eventInfo->cctx = cctx;
         eventInfo->callCtx = callCtx;
         eventInfo->eventId = eventId;
