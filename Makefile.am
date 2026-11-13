@@ -16,8 +16,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 ##########################################################################
-SUBDIRS = core
-DIST_SUBDIRS = core
+SUBDIRS = core test
+DIST_SUBDIRS = core test
+EXTRA_DIST = core/iarmReplyValidation.h
 
 IPK_GEN_PATH = $(abs_top_builddir)/ipk
 IPK_GEN_STAGING_DIR=$(abs_top_builddir)/staging_dir

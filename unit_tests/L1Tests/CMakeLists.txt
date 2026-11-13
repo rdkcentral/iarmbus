@@ -17,7 +17,8 @@ set_source_files_properties(
     ../../core/libIARM-dbus.c ../../core/libIBus-dbus.c
     ../../core/libIBusDaemon-dbus.c PROPERTIES LANGUAGE CXX)
 target_compile_features(iarmbus_under_test PRIVATE cxx_std_14)
-target_compile_definitions(iarmbus_under_test PRIVATE _USE_DBUS TP_ENABLED)
+target_compile_definitions(iarmbus_under_test PRIVATE
+    _USE_DBUS TP_ENABLED SAFEC_DUMMY_API=1 IARM_ALLOW_DUMMY_SAFEC=1)
 target_include_directories(iarmbus_under_test PRIVATE
     ../../core ../../core/include ../../stubs)
 target_link_libraries(iarmbus_under_test PUBLIC

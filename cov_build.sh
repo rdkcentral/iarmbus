@@ -16,7 +16,7 @@ export GLIB_INCLUDE_PATH="/usr/include/glib-2.0"
 export GLIB_CONFIG_INCLUDE_PATH="${ROOT_INC}/glib-2.0/include"
 export DBUS_INCLUDE_PATH="/usr/include/dbus-1.0"
 export DBUS_CONFIG_INCLUDE_PATH="${ROOT_INC}/dbus-1.0/include"
-CFLAGS="$CFLAGS -O2 -Wall -fPIC -I./include -I${GLIB_INCLUDE_PATH} -I${GLIB_CONFIG_INCLUDE_PATH} \
+CFLAGS="$CFLAGS -O2 -Wall -fPIC -DSAFEC_DUMMY_API=1 -DIARM_ALLOW_DUMMY_SAFEC=1 -I./include -I${GLIB_INCLUDE_PATH} -I${GLIB_CONFIG_INCLUDE_PATH} \
 	-I${WORKDIR}/stubs \
 	-I/usr/include \
 	-I${DBUS_INCLUDE_PATH} \
