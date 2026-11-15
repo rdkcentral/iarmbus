@@ -19,6 +19,12 @@
 SUBDIRS = core
 DIST_SUBDIRS = core
 
+TESTS = test/test_member_name_validation.sh \
+	test/test_reply_wiring.sh \
+	test/test_rpc_length_contract.sh \
+	test/test_format_string.sh
+EXTRA_DIST = $(TESTS)
+
 IPK_GEN_PATH = $(abs_top_builddir)/ipk
 IPK_GEN_STAGING_DIR=$(abs_top_builddir)/staging_dir
 IPK_GEN_INPUT  = debian-binary control.tar.gz data.tar.gz
