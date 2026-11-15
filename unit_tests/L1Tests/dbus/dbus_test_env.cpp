@@ -232,19 +232,39 @@ void RawDbusPeer::Run()
                     const char *text = "unexpected";
                     dbus_message_append_args(reply, DBUS_TYPE_STRING, &text, DBUS_TYPE_INVALID);
                 } else if (std::strcmp(member, "EmptyReply") != 0) {
-                    DBusMessageIter args, array;
-                    const unsigned char *bytes = nullptr;
-                    int len = 0;
-                    if (dbus_message_iter_init(msg, &args) && dbus_message_iter_next(&args) &&
-                        dbus_message_iter_get_arg_type(&args) == DBUS_TYPE_ARRAY) {
-                        dbus_message_iter_recurse(&args, &array);
-                        dbus_message_iter_get_fixed_array(&array, &bytes, &len);
+                    if (std::strcmp(member, "OversizedReply") == 0) {
+                        const dbus_int32_t result = 0x12345678;
+                        const unsigned char oversized[] = {1, 2, 3, 4, 5};
+                        const unsigned char *payload = oversized;
+                        const int payloadLen = sizeof(oversized);
+                        dbus_message_append_args(reply, DBUS_TYPE_INT32, &result,
+                                                 DBUS_TYPE_ARRAY, DBUS_TYPE_BYTE,
+                                                 &payload, payloadLen, DBUS_TYPE_INVALID);
+                    } else if (std::strcmp(member, "TrailingReply") == 0) {
+                        const dbus_int32_t result = 0x12345678;
+                        const unsigned char payload[] = {1, 2, 3, 4};
+                        const unsigned char *payloadPtr = payload;
+                        const int payloadLen = sizeof(payload);
+                        const dbus_uint32_t trailing = 0xabcdef01;
+                        dbus_message_append_args(reply, DBUS_TYPE_INT32, &result,
+                                                 DBUS_TYPE_ARRAY, DBUS_TYPE_BYTE,
+                                                 &payloadPtr, payloadLen,
+                                                 DBUS_TYPE_UINT32, &trailing, DBUS_TYPE_INVALID);
+                    } else {
+                        DBusMessageIter args, array;
+                        const unsigned char *bytes = nullptr;
+                        int len = 0;
+                        if (dbus_message_iter_init(msg, &args) && dbus_message_iter_next(&args) &&
+                            dbus_message_iter_get_arg_type(&args) == DBUS_TYPE_ARRAY) {
+                            dbus_message_iter_recurse(&args, &array);
+                            dbus_message_iter_get_fixed_array(&array, &bytes, &len);
+                        }
+                        const dbus_int32_t result = 0;
+                        const unsigned char *payload = len > kIarmHeaderSize ? bytes + kIarmHeaderSize : bytes;
+                        const int payloadLen = len > kIarmHeaderSize ? len - kIarmHeaderSize : 0;
+                        dbus_message_append_args(reply, DBUS_TYPE_INT32, &result, DBUS_TYPE_ARRAY, DBUS_TYPE_BYTE,
+                                                 &payload, payloadLen, DBUS_TYPE_INVALID);
                     }
-                    const dbus_int32_t result = 0;
-                    const unsigned char *payload = len > kIarmHeaderSize ? bytes + kIarmHeaderSize : bytes;
-                    const int payloadLen = len > kIarmHeaderSize ? len - kIarmHeaderSize : 0;
-                    dbus_message_append_args(reply, DBUS_TYPE_INT32, &result, DBUS_TYPE_ARRAY, DBUS_TYPE_BYTE,
-                                             &payload, payloadLen, DBUS_TYPE_INVALID);
                 }
                 dbus_connection_send(conn_, reply, nullptr);
                 dbus_connection_flush(conn_);

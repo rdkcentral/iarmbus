@@ -18,6 +18,7 @@
 */
 
 #define SAFEC_DUMMY_API 1
+
 #ifndef SAFEC_DUMMY_API
 #include "safe_str_lib.h"
 #include "safe_mem_lib.h"
