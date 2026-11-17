@@ -111,6 +111,74 @@ TEST_F(IarmBusDaemonTest, MemberRegistrationLifecycle)
     EXPECT_EQ(IARM_RESULT_IPCCORE_FAIL, IARM_Bus_IsConnected(kGhostName, &registered));
 }
 
+TEST_F(IarmBusDaemonTest, UnterminatedFixedWidthNamesAreRejected)
+{
+    IARM_Bus_Daemon_CheckRegistration_Param_t clientState{};
+    std::strncpy(clientState.memberName, kClientName, sizeof(clientState.memberName) - 1);
+    ASSERT_EQ(IARM_RESULT_SUCCESS,
+              CallDaemon(IARM_BUS_DAEMON_API_CheckRegistration, &clientState, sizeof(clientState)));
+    ASSERT_EQ(1, clientState.isRegistered);
+
+    IARM_Bus_Daemon_CheckRegistration_Param_t probe{};
+    std::strncpy(probe.memberName, kGhostName, sizeof(probe.memberName) - 1);
+    ASSERT_EQ(IARM_RESULT_SUCCESS,
+              CallDaemon(IARM_BUS_DAEMON_API_CheckRegistration, &probe, sizeof(probe)));
+    ASSERT_EQ(0, probe.isRegistered);
+
+    IARM_Bus_Member_t member{};
+    std::memset(member.selfName, 'M', sizeof(member.selfName));
+    EXPECT_EQ(IARM_RESULT_INVALID_PARAM,
+              CallDaemon(IARM_BUS_DAEMON_API_RegisterMember, &member, sizeof(member)));
+
+    IARM_Bus_Daemon_RegisterPreChange_Param_t preChange{};
+    std::strncpy(preChange.ownerName, kClientName, sizeof(preChange.ownerName) - 1);
+    std::memset(preChange.methodName, 'P', sizeof(preChange.methodName));
+    EXPECT_EQ(IARM_RESULT_INVALID_PARAM,
+              CallDaemon(IARM_BUS_DAEMON_API_RegisterPreChange, &preChange, sizeof(preChange)));
+
+    std::memset(&preChange, 0, sizeof(preChange));
+    std::memset(preChange.ownerName, 'O', sizeof(preChange.ownerName));
+    std::strncpy(preChange.methodName, IARM_BUS_COMMON_API_PowerPreChange,
+                 sizeof(preChange.methodName) - 1);
+    EXPECT_EQ(IARM_RESULT_INVALID_PARAM,
+              CallDaemon(IARM_BUS_DAEMON_API_RegisterPreChange, &preChange, sizeof(preChange)));
+
+    probe.isRegistered = 0;
+    EXPECT_EQ(IARM_RESULT_SUCCESS,
+              CallDaemon(IARM_BUS_DAEMON_API_CheckRegistration, &probe, sizeof(probe)));
+    EXPECT_EQ(0, probe.isRegistered);
+
+    clientState.isRegistered = 0;
+    EXPECT_EQ(IARM_RESULT_SUCCESS,
+              CallDaemon(IARM_BUS_DAEMON_API_CheckRegistration, &clientState, sizeof(clientState)));
+    EXPECT_EQ(1, clientState.isRegistered);
+}
+
+TEST_F(IarmBusDaemonTest, FixedWidthNamesTerminatedAtLastByteAreAccepted)
+{
+    IARM_Bus_Member_t member{};
+    std::memset(member.selfName, 'B', sizeof(member.selfName) - 1);
+    member.selfName[sizeof(member.selfName) - 1] = '\0';
+    ASSERT_EQ(IARM_RESULT_SUCCESS,
+              CallDaemon(IARM_BUS_DAEMON_API_RegisterMember, &member, sizeof(member)));
+
+    IARM_Bus_Daemon_CheckRegistration_Param_t check{};
+    std::memcpy(check.memberName, member.selfName, sizeof(check.memberName));
+    ASSERT_EQ(IARM_RESULT_SUCCESS,
+              CallDaemon(IARM_BUS_DAEMON_API_CheckRegistration, &check, sizeof(check)));
+    ASSERT_EQ(1, check.isRegistered);
+    ASSERT_EQ(IARM_RESULT_SUCCESS,
+              CallDaemon(IARM_BUS_DAEMON_API_UnRegisterMember, &member, sizeof(member)));
+
+    IARM_Bus_Daemon_RegisterPreChange_Param_t preChange{};
+    std::memset(preChange.ownerName, 'O', sizeof(preChange.ownerName) - 1);
+    preChange.ownerName[sizeof(preChange.ownerName) - 1] = '\0';
+    std::memset(preChange.methodName, 'P', sizeof(preChange.methodName) - 1);
+    preChange.methodName[sizeof(preChange.methodName) - 1] = '\0';
+    EXPECT_EQ(IARM_RESULT_SUCCESS,
+              CallDaemon(IARM_BUS_DAEMON_API_RegisterPreChange, &preChange, sizeof(preChange)));
+}
+
 TEST_F(IarmBusDaemonTest, DisconnectAfterDaemonForgotMember)
 {
     IARM_Bus_Member_t self = MakeMember(kClientName);
@@ -153,6 +221,41 @@ TEST_F(IarmBusDaemonTest, DaemonRejectsInvalidResourceInRawRequest)
     release.requestor = MakeMember(kClientName);
     release.resrcType = IARM_BUS_RESOURCE_MAX;
     EXPECT_EQ(IARM_RESULT_INVALID_PARAM, CallDaemon(IARM_BUS_DAEMON_API_ReleaseOwnership, &release, sizeof(release)));
+}
+
+TEST_F(IarmBusDaemonTest, UnregisteredMemberCannotRequestOrReleaseOwnership)
+{
+    ASSERT_EQ(IARM_RESULT_SUCCESS, IARM_BusDaemon_RequestOwnership(IARM_BUS_RESOURCE_FOCUS));
+
+    IARM_Bus_Member_t unregistered = MakeMember("L1UnregisteredOwner");
+    IARM_Bus_Daemon_RequestOwnership_Param_t request{};
+    request.requestor = unregistered;
+    request.resrcType = IARM_BUS_RESOURCE_FOCUS;
+    EXPECT_EQ(IARM_RESULT_INVALID_PARAM,
+              CallDaemon(IARM_BUS_DAEMON_API_RequestOwnership, &request, sizeof(request)));
+
+    IARM_Bus_Daemon_ReleaseOwnership_Param_t release{};
+    release.requestor = unregistered;
+    release.resrcType = IARM_BUS_RESOURCE_FOCUS;
+    EXPECT_EQ(IARM_RESULT_INVALID_PARAM,
+              CallDaemon(IARM_BUS_DAEMON_API_ReleaseOwnership, &release, sizeof(release)));
+
+    EXPECT_EQ(IARM_RESULT_INVALID_STATE, IARM_BusDaemon_RequestOwnership(IARM_BUS_RESOURCE_FOCUS));
+    EXPECT_EQ(IARM_RESULT_SUCCESS, IARM_BusDaemon_ReleaseOwnership(IARM_BUS_RESOURCE_FOCUS));
+}
+
+TEST_F(IarmBusDaemonTest, DaemonRejectsUndersizedRequestsBeforeDispatch)
+{
+    IARM_Bus_Daemon_RequestOwnership_Param_t request{};
+    request.requestor = MakeMember(kClientName);
+    request.resrcType = IARM_BUS_RESOURCE_FOCUS;
+
+    EXPECT_EQ(IARM_RESULT_INVALID_PARAM,
+              CallDaemon(IARM_BUS_DAEMON_API_RequestOwnership, &request, sizeof(request) - 1));
+
+    IARM_Bus_SetTraceparent("00-0123456789abcdef0123456789abcdef-0123456789abcdef-01");
+    EXPECT_EQ(IARM_RESULT_INVALID_PARAM,
+              CallDaemon(IARM_BUS_DAEMON_API_RequestOwnership, &request, sizeof(request) - 1));
 }
 
 TEST_F(IarmBusDaemonTest, ContestedOwnershipAndForcedRelease)
