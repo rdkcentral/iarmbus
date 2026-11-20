@@ -17,7 +17,10 @@
  * limitations under the License.
 */
 
-#define SAFEC_DUMMY_API 1
+#if defined(SAFEC_DUMMY_API) && !defined(IARM_ALLOW_DUMMY_SAFEC)
+#error "SAFEC_DUMMY_API requires an explicit test or coverage build opt-in"
+#endif
+
 #ifndef SAFEC_DUMMY_API
 #include "safe_str_lib.h"
 #include "safe_mem_lib.h"
@@ -60,6 +63,7 @@
     }
 
 #ifdef SAFEC_DUMMY_API
+#include <stdio.h>
 #include <stdarg.h>
 #include <string.h>
 #include <strings.h>

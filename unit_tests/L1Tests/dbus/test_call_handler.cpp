@@ -10,10 +10,16 @@
 
 DBusHandlerResult dbusCallHandler(DBusConnection *connection, DBusMessage *msg, void *user_data);
 
+typedef enum _IARM_FilterType_t {
+    IARM_FILTER_METHOD,
+    IARM_FILTER_EVENT
+} IARM_FilterType_t;
+
 namespace {
 
 // Layout mirrors of IARM_UICall_t / IARM_UIEvent_t in core/libIARM-dbus.c.
 struct FakeCallInfo {
+    IARM_FilterType_t type;
     void *cctx;
     char callName[IARM_MAX_NAME_LEN];
     IARM_Call_t handler;
@@ -21,6 +27,7 @@ struct FakeCallInfo {
 };
 
 struct FakeEventInfo {
+    IARM_FilterType_t type;
     void *cctx;
     IARM_EventId_t eventId;
     IARM_Listener_t listener;
@@ -77,7 +84,17 @@ public:
 
     Message &Bytes(size_t count)
     {
+        const size_t payloadSize = count > static_cast<size_t>(kIarmHeaderSize) ?
+            count - static_cast<size_t>(kIarmHeaderSize) : 0;
+        return Bytes(count, payloadSize);
+    }
+
+    Message &Bytes(size_t count, size_t payloadSize)
+    {
         std::vector<unsigned char> data(count, 0x5a);
+        if (count >= sizeof(size_t)) {
+            std::memcpy(data.data(), &payloadSize, sizeof(payloadSize));
+        }
         const unsigned char *ptr = data.data();
         DBusMessageIter array;
         dbus_message_iter_open_container(&iter_, DBUS_TYPE_ARRAY, "y", &array);
@@ -96,6 +113,7 @@ private:
 FakeEventInfo MakeEvent(IARM_Listener_t listener)
 {
     FakeEventInfo info{};
+    info.type = IARM_FILTER_EVENT;
     info.cctx = g_fakeCtx;
     info.eventId = kEventId;
     info.listener = listener;
@@ -106,6 +124,7 @@ FakeEventInfo MakeEvent(IARM_Listener_t listener)
 FakeCallInfo MakeCall(IARM_Call_t handler)
 {
     FakeCallInfo info{};
+    info.type = IARM_FILTER_METHOD;
     info.cctx = g_fakeCtx;
     std::strncpy(info.callName, kMethod, sizeof(info.callName) - 1);
     info.handler = handler;
@@ -152,6 +171,18 @@ TEST(IARMDbusCallHandler, WellFormedSignalReachesListener)
     EXPECT_EQ(1, g_listenerCalls);
 }
 
+TEST(IARMDbusCallHandler, SignalWithMethodContextDoesNotInvokeCallbacks)
+{
+    g_listenerCalls = 0;
+    g_handlerCalls = 0;
+    FakeCallInfo info = MakeCall(CountingHandler);
+
+    EXPECT_EQ(DBUS_HANDLER_RESULT_NOT_YET_HANDLED,
+              Message(NewSignal()).U32(kEventId).Str(kOwner).U32(4).Bytes(4).Dispatch(&info));
+    EXPECT_EQ(0, g_listenerCalls);
+    EXPECT_EQ(0, g_handlerCalls);
+}
+
 TEST(IARMDbusCallHandler, ListenerExceptionsAreContained)
 {
     FakeEventInfo info = MakeEvent(ThrowingListener);
@@ -171,7 +202,24 @@ TEST(IARMDbusCallHandler, MalformedMethodCallsAreIgnored)
     EXPECT_EQ(DBUS_HANDLER_RESULT_NOT_YET_HANDLED,
               Message(NewCall("iarm.method.Type", kMethod)).U32(4).U32(0).Dispatch(&info));
     EXPECT_EQ(DBUS_HANDLER_RESULT_NOT_YET_HANDLED,
-              Message(NewCall("iarm.method.Type", "OtherMethod")).U32(4).Bytes(kIarmHeaderSize + 4).Dispatch(&info));
+              Message(NewCall("iarm.method.Type", kMethod)).U32(4).Bytes(kIarmHeaderSize + 4).Dispatch(&info));
+    EXPECT_EQ(0, g_handlerCalls);
+}
+
+TEST(IARMDbusCallHandler, MalformedMethodCallSizesAreIgnored)
+{
+    g_handlerCalls = 0;
+    FakeCallInfo info = MakeCall(CountingHandler);
+
+    EXPECT_EQ(DBUS_HANDLER_RESULT_NOT_YET_HANDLED,
+              Message(NewCall("iarm.method.Type", kMethod))
+                  .U32(kIarmHeaderSize - 1).Bytes(kIarmHeaderSize - 1).Dispatch(&info));
+    EXPECT_EQ(DBUS_HANDLER_RESULT_NOT_YET_HANDLED,
+              Message(NewCall("iarm.method.Type", kMethod))
+                  .U32(kIarmHeaderSize + 4).Bytes(kIarmHeaderSize + 3).Dispatch(&info));
+    EXPECT_EQ(DBUS_HANDLER_RESULT_NOT_YET_HANDLED,
+              Message(NewCall("iarm.method.Type", kMethod))
+                  .U32(kIarmHeaderSize + 4).Bytes(kIarmHeaderSize + 4, 3).Dispatch(&info));
     EXPECT_EQ(0, g_handlerCalls);
 }
 
@@ -188,6 +236,19 @@ TEST(IARMDbusCallHandler, WellFormedMethodCallReachesHandler)
     EXPECT_EQ(DBUS_HANDLER_RESULT_HANDLED,
               Message(NewCall("iarm.method.Type", kMethod)).U32(kIarmHeaderSize + 4).Bytes(kIarmHeaderSize + 4).Dispatch(&info));
     EXPECT_EQ(1, g_handlerCalls);
+}
+
+TEST(IARMDbusCallHandler, MethodCallWithEventContextDoesNotInvokeCallbacks)
+{
+    g_listenerCalls = 0;
+    g_handlerCalls = 0;
+    FakeEventInfo info = MakeEvent(CountingListener);
+
+    EXPECT_EQ(DBUS_HANDLER_RESULT_NOT_YET_HANDLED,
+              Message(NewCall("iarm.method.Type", kMethod))
+                  .U32(kIarmHeaderSize + 4).Bytes(kIarmHeaderSize + 4).Dispatch(&info));
+    EXPECT_EQ(0, g_listenerCalls);
+    EXPECT_EQ(0, g_handlerCalls);
 }
 
 TEST(IARMDbusCallHandler, MissingHandlerIsHandled)
