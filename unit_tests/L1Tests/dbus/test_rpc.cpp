@@ -129,6 +129,24 @@ TEST_F(IarmBusClientTest, IsConnectedReflectsDaemonRegistration)
     EXPECT_EQ(0, registered);
 }
 
+TEST_F(IarmBusClientTest, IsConnectedValidatesInputBoundaries)
+{
+    int registered = 1;
+    EXPECT_EQ(IARM_RESULT_INVALID_PARAM, IARM_Bus_IsConnected(nullptr, &registered));
+    EXPECT_EQ(0, registered);
+    EXPECT_EQ(IARM_RESULT_INVALID_PARAM, IARM_Bus_IsConnected(kClientName, nullptr));
+
+    const std::string unterminatedName(IARM_MAX_NAME_LEN, 'x');
+    registered = 1;
+    EXPECT_EQ(IARM_RESULT_INVALID_PARAM, IARM_Bus_IsConnected(unterminatedName.c_str(), &registered));
+    EXPECT_EQ(0, registered);
+
+    const std::string boundaryName(IARM_MAX_NAME_LEN - 1, 'x');
+    registered = 1;
+    EXPECT_EQ(IARM_RESULT_IPCCORE_FAIL, IARM_Bus_IsConnected(boundaryName.c_str(), &registered));
+    EXPECT_EQ(0, registered);
+}
+
 TEST_F(IarmBusClientTest, InitAndConnectTwiceAreRejected)
 {
     EXPECT_EQ(IARM_RESULT_INVALID_STATE, IARM_Bus_Init(kClientName));
