@@ -18,7 +18,6 @@
 ##########################################################################
 RM          := rm -rf 
 CFLAGS      := -g -fPIC -D_REENTRANT -Wall
-
 INCLUDE     :=	-I.\
 		-I./include	\
 		-I$(IARM_PATH)/core/                            \

@@ -47,6 +47,7 @@
 typedef struct _IARM_Bus_CallContext_t {
 	char ownerName[IARM_MAX_NAME_LEN];
 	char methodName[IARM_MAX_NAME_LEN];
+    size_t expectedArgSize;
 	IARM_BusCall_t handler;
 }IARM_Bus_CallContext_t;
 
@@ -381,11 +382,13 @@ IARM_Result_t IARM_Bus_BroadcastEvent(const char *ownerName, IARM_EventId_t even
 		eventData->id = eventId;
 		eventData->len = len;
 		
-		rc = memcpy_s(&eventData->data, len, data, len);
-		if(rc!=EOK)
-		{
-			ERR_CHK(rc);
-		}
+        if (len > 0) {
+            rc = memcpy_s(&eventData->data, len, data, len);
+            if(rc!=EOK)
+            {
+                ERR_CHK(rc);
+            }
+        }
 
 #ifdef TP_ENABLED
         {
@@ -633,19 +636,25 @@ IARM_Result_t IARM_Bus_IsConnected(const char *memberName, int *isRegistered)
     IBUS_Lock(lock);
     if (m_initialized && m_connected) {
 
-        IARM_Bus_Daemon_CheckRegistration_Param_t req;
+        if (memberName == NULL || isRegistered == NULL ||
+            strnlen(memberName, IARM_MAX_NAME_LEN) >= IARM_MAX_NAME_LEN) {
+            retCode = IARM_RESULT_INVALID_PARAM;
+        } else {
+            IARM_Bus_Daemon_CheckRegistration_Param_t req;
 
-        strncpy(req.memberName,memberName,IARM_MAX_NAME_LEN - 1);
+            strncpy(req.memberName,memberName,IARM_MAX_NAME_LEN - 1);
+            req.memberName[IARM_MAX_NAME_LEN - 1] = '\0';
 
-        req.isRegistered = 0;
+            req.isRegistered = 0;
 
-        IARM_Result_t callRet = IARM_Bus_Call(IARM_BUS_DAEMON_NAME, IARM_BUS_DAEMON_API_CheckRegistration, (void *)&req, sizeof(IARM_Bus_Daemon_CheckRegistration_Param_t));
-        if (callRet != IARM_RESULT_SUCCESS) {
-            log("%s IARM_Bus_Call failed with retCode %d\n", __FUNCTION__, callRet);
-            retCode = callRet;
-        } else if(req.isRegistered == 0) { //on failure case, we need to return failure.
-		    log("%s failed to communicate with daemon\n", __FUNCTION__);
-            retCode = IARM_RESULT_IPCCORE_FAIL;
+            IARM_Result_t callRet = IARM_Bus_Call(IARM_BUS_DAEMON_NAME, IARM_BUS_DAEMON_API_CheckRegistration, (void *)&req, sizeof(IARM_Bus_Daemon_CheckRegistration_Param_t));
+            if (callRet != IARM_RESULT_SUCCESS) {
+                log("%s IARM_Bus_Call failed with retCode %d\n", __FUNCTION__, callRet);
+                retCode = callRet;
+            } else if(req.isRegistered == 0) { //on failure case, we need to return failure.
+		        log("%s failed to communicate with daemon\n", __FUNCTION__);
+                retCode = IARM_RESULT_IPCCORE_FAIL;
+            }
         }
     }
     else {
@@ -655,13 +664,8 @@ IARM_Result_t IARM_Bus_IsConnected(const char *memberName, int *isRegistered)
 
     IBUS_Unlock(lock);
 
-    if(retCode == IARM_RESULT_SUCCESS)
-    {
-        *isRegistered = 1;
-    }
-    else
-    {
-        *isRegistered = 0;
+    if (isRegistered != NULL) {
+        *isRegistered = (retCode == IARM_RESULT_SUCCESS) ? 1 : 0;
     }
 
     return retCode;
@@ -678,6 +682,22 @@ IARM_Result_t IARM_Bus_IsConnected(const char *memberName, int *isRegistered)
  *
  * @return IARM_Result_t Error Code.
  */
+static size_t _ExpectedDaemonArgumentSize(const char *methodName)
+{
+    if (strcmp(methodName, IARM_BUS_DAEMON_API_RequestOwnership) == 0) return sizeof(IARM_Bus_Daemon_RequestOwnership_Param_t);
+    if (strcmp(methodName, IARM_BUS_DAEMON_API_ReleaseOwnership) == 0) return sizeof(IARM_Bus_Daemon_ReleaseOwnership_Param_t);
+    if (strcmp(methodName, IARM_BUS_DAEMON_API_RegisterMember) == 0 ||
+        strcmp(methodName, IARM_BUS_DAEMON_API_UnRegisterMember) == 0) return sizeof(IARM_Bus_Member_t);
+    if (strcmp(methodName, IARM_BUS_DAEMON_API_PowerPreChange) == 0 ||
+        strcmp(methodName, IARM_BUS_DAEMON_API_DeepSleepWakeup) == 0) return sizeof(IARM_Bus_Daemon_PowerPreChange_Param_t);
+    if (strcmp(methodName, IARM_BUS_DAEMON_API_CheckRegistration) == 0) return sizeof(IARM_Bus_Daemon_CheckRegistration_Param_t);
+    if (strcmp(methodName, IARM_BUS_DAEMON_API_ResolutionPreChange) == 0 ||
+        strcmp(methodName, IARM_BUS_DAEMON_API_ResolutionPostChange) == 0) return sizeof(IARM_Bus_Daemon_ResolutionChange_Param_t);
+    if (strcmp(methodName, IARM_BUS_DAEMON_API_SysModeChange) == 0) return sizeof(IARM_Bus_Daemon_SysModeChange_Param_t);
+    if (strcmp(methodName, IARM_BUS_DAEMON_API_RegisterPreChange) == 0) return sizeof(IARM_Bus_Daemon_RegisterPreChange_Param_t);
+    return 0;
+}
+
 IARM_Result_t IARM_Bus_RegisterCall(const char *methodName, IARM_BusCall_t handler)
 {
     IARM_Result_t retCode = IARM_RESULT_SUCCESS;
@@ -704,6 +724,8 @@ IARM_Result_t IARM_Bus_RegisterCall(const char *methodName, IARM_BusCall_t handl
 		cctx->ownerName[IARM_MAX_NAME_LEN -1] = '\0';
 		strncpy(cctx->methodName, methodName, IARM_MAX_NAME_LEN -1);
 		cctx->methodName[IARM_MAX_NAME_LEN -1] = '\0';
+        cctx->expectedArgSize = strcmp(m_member->selfName, IARM_BUS_DAEMON_NAME) == 0 ?
+            _ExpectedDaemonArgumentSize(methodName) : 0;
 		cctx->handler = handler;
         retCode = IARM_RegisterCall(m_member->selfName, methodName, _BusCall_FuncWrapper, (void *)cctx/*callCtx*/);
         {
@@ -742,7 +764,7 @@ IARM_Result_t IARM_Bus_Call_with_IPCTimeout(const char *ownerName,  const char *
         retCode = IARM_Malloc(IARM_MEMTYPE_PROCESSLOCAL, (arg != NULL) ? argLen : 1, (void **)&argOut);
         
         if (retCode == IARM_RESULT_SUCCESS) {
-            if(arg != NULL)
+            if(arg != NULL && argLen > 0)
             {
                 
 		rc = memcpy_s(argOut,argLen, arg, argLen);
@@ -754,7 +776,7 @@ IARM_Result_t IARM_Bus_Call_with_IPCTimeout(const char *ownerName,  const char *
             }
             IARM_Result_t retVal = IARM_RESULT_SUCCESS;
             retCode = IARM_CallWithTimeout(ownerName, methodName, argOut, timeout, (int *)&retVal);
-            if ((retCode == IARM_RESULT_SUCCESS) && (argOut != NULL))
+            if ((retCode == IARM_RESULT_SUCCESS) && (argOut != NULL) && (argLen > 0))
             {
                 
 	    	rc = memcpy_s(arg,argLen,argOut,argLen);
@@ -824,7 +846,7 @@ IARM_Result_t IARM_Bus_Call(const char *ownerName,  const char *methodName, void
         retCode = IARM_Malloc(IARM_MEMTYPE_PROCESSLOCAL, (payload != NULL) ? payloadLen : 1, (void **)&argOut);
         
         if (retCode == IARM_RESULT_SUCCESS) {
-            if(payload != NULL)
+            if(payload != NULL && payloadLen > 0)
             {
                 
 		rc = memcpy_s(argOut,payloadLen, payload, payloadLen);
@@ -836,7 +858,7 @@ IARM_Result_t IARM_Bus_Call(const char *ownerName,  const char *methodName, void
             }
             IARM_Result_t retVal = IARM_RESULT_SUCCESS;
             retCode = IARM_Call(ownerName, methodName, argOut, (int *)&retVal);
-            if ((retCode == IARM_RESULT_SUCCESS) && (argOut != NULL))
+            if ((retCode == IARM_RESULT_SUCCESS) && (argOut != NULL) && (argLen > 0))
             {
 #ifdef TP_ENABLED
                 if (env != NULL) {
@@ -1286,6 +1308,7 @@ static void _BusCall_FuncWrapper(void *callCtx, unsigned long methodID, void *ar
 	IARM_BusCall_t handler = (IARM_BusCall_t)cctx->handler;
 
     void *handler_arg = arg;
+    size_t handlerArgSize = (size_t)methodID;
 #ifdef TP_ENABLED
     iarm_tp_clear_incoming();
     if (arg) {
@@ -1297,11 +1320,18 @@ static void _BusCall_FuncWrapper(void *callCtx, unsigned long methodID, void *ar
             iarm_tp_valid(env->traceparent)) {
             iarm_tp_set_incoming(env->traceparent);
             handler_arg = env->inner_arg;
+            handlerArgSize = env->inner_len;
         }
     }
 #endif
 
-    IARM_Result_t retCode = handler(handler_arg);
+    IARM_Result_t retCode;
+    if (cctx->expectedArgSize != 0 && handlerArgSize != cctx->expectedArgSize) {
+        retCode = IARM_RESULT_INVALID_PARAM;
+    }
+    else {
+        retCode = handler(handler_arg);
+    }
 #ifdef TP_ENABLED
     iarm_tp_clear_incoming();
 #endif
