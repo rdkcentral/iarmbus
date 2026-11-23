@@ -63,6 +63,7 @@ if [ $PLATFORM_SOC = "intel" ]; then
 	export GLIBS='-lglib-2.0 -lintl -lz'
  elif [ $PLATFORM_SOC = "mstar" ]; then 
 	export IARM_PATH=$BUILDS_DIR/iarmbus
+	export FSROOT=$COMBINED_ROOT/sdk/fsroot
 	CROSS_COMPILE=arm-none-linux-gnueabi
 	export CC=$CROSS_COMPILE-gcc
 	export CXX=$CROSS_COMPILE-g++
