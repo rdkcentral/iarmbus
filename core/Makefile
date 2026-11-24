@@ -40,6 +40,11 @@ LDFLAGS+= -L$(COMBINED_ROOT)/rdklogger/build/lib -lrdkloggers
 CFLAGS      += -DRDK_LOGGER_ENABLED 
 endif
 
+ifeq ($(TELEMETRY_ENABLED),y)
+INCLUDE += -I$(TELEMETRY_INCLUDE_PATH)
+LDFLAGS += -ltelemetry_msgsender
+endif
+
 CFLAGS      += $(INCLUDE)
 
 ifeq ($(USE_DBUS),y)
