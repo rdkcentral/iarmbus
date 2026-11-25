@@ -59,6 +59,40 @@ TEST_F(IarmBusClientTest, MalformedTransportRepliesDoNotMutateOutputs)
     EXPECT_EQ(IARM_RESULT_SUCCESS, IARM_Free(IARM_MEMTYPE_PROCESSLOCAL, argument));
 }
 
+TEST_F(IarmBusClientTest, ServiceNamesCannotBeReplaced)
+{
+    DBusError error;
+    dbus_error_init(&error);
+    DBusConnection *contender = dbus_bus_get_private(DBUS_BUS_SYSTEM, &error);
+    if (dbus_error_is_set(&error)) {
+        const std::string errorMessage = error.message != nullptr ? error.message : "unknown D-Bus error";
+        dbus_error_free(&error);
+        FAIL() << errorMessage;
+    }
+    ASSERT_NE(nullptr, contender);
+    dbus_error_free(&error);
+    dbus_connection_set_exit_on_disconnect(contender, FALSE);
+
+    const char *serviceNames[] = {
+        "process.iarm.L1Client",
+        "process.iarm.L1Client.Event",
+        "process.iarm.L1Client.Method",
+    };
+    for (const char *serviceName : serviceNames) {
+        dbus_error_init(&error);
+        const int result = dbus_bus_request_name(
+            contender, serviceName,
+            DBUS_NAME_FLAG_REPLACE_EXISTING | DBUS_NAME_FLAG_DO_NOT_QUEUE, &error);
+
+        EXPECT_FALSE(dbus_error_is_set(&error)) << (error.message != nullptr ? error.message : "");
+        EXPECT_EQ(DBUS_REQUEST_NAME_REPLY_EXISTS, result) << serviceName;
+        dbus_error_free(&error);
+    }
+
+    dbus_connection_close(contender);
+    dbus_connection_unref(contender);
+}
+
 TEST_F(IarmBusClientTest, OwnerThatReleasesHandsResourceOver)
 {
     RawDbusPeer peer(kPeerName);
